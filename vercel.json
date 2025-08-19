@@ -4,19 +4,5 @@
   "devCommand": "npm run dev",
   "installCommand": "npm install",
   "framework": "nextjs",
-  "regions": [
-    "sin1"
-  ],
-  "env": {
-    "NODE_ENV": "production"
-  },
-  "build": {
-    "env": {
-      "NEXT_PUBLIC_APP_URL": "@next_public_app_url",
-      "NEXTAUTH_URL": "@nextauth_url",
-      "NEXTAUTH_SECRET": "@nextauth_secret",
-      "TURSO_CONNECTION_URL": "@turso_connection_url",
-      "TURSO_AUTH_TOKEN": "@turso_auth_token"
-    }
-  }
+  "regions": ["sin1"]
 }
