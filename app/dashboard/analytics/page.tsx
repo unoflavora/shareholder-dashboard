@@ -1,32 +1,35 @@
 'use client';
 
 import { useState, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Loader2, TrendingUp, Users, PieChart, BarChart3, Download, Search, ArrowUp, ArrowDown } from 'lucide-react';
+import { Loader2, TrendingUp, Users, BarChart3, Calendar, TrendingDown, UserPlus, Users2, Target } from 'lucide-react';
 import {
   LineChart,
   Line,
   BarChart,
   Bar,
-  PieChart as RePieChart,
-  Pie,
-  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
   ResponsiveContainer,
-  Area,
   AreaChart,
+  Area
 } from 'recharts';
 import { toast } from 'sonner';
+
+// Import new analytics components
+import ActiveBuyersAnalysis from '@/app/components/analytics/ActiveBuyersAnalysis';
+import ActiveSellersAnalysis from '@/app/components/analytics/ActiveSellersAnalysis';
+import NewShareholdersAnalysis from '@/app/components/analytics/NewShareholdersAnalysis';
+import BehaviorPatterns from '@/app/components/analytics/BehaviorPatterns';
+import TimingAnalysis from '@/app/components/analytics/TimingAnalysis';
 
 interface AnalyticsData {
   trends: Array<{
@@ -39,11 +42,6 @@ interface AnalyticsData {
     name: string;
     shares: number;
     percentage: number;
-  }>;
-  distribution: Array<{
-    range: string;
-    count: number;
-    totalShares: number;
   }>;
   monthlyData: Array<{
     month: string;
@@ -60,38 +58,9 @@ interface ComparisonData {
   details: any;
 }
 
-interface ShareholderGrowthData {
-  shareholder: {
-    id: number;
-    name: string;
-  };
-  growthData: Array<{
-    date: string;
-    shares: number;
-    percentage: number;
-  }>;
-  metrics: {
-    initialShares: number;
-    finalShares: number;
-    sharesChange: number;
-    sharesChangePercent: number;
-    initialPercentage: number;
-    finalPercentage: number;
-    percentageChange: number;
-    dateRange: {
-      start: string;
-      end: string;
-    };
-  } | null;
-}
-
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
-
 function AnalyticsContent() {
-  const searchParams = useSearchParams();
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
   const [comparisonData, setComparisonData] = useState<ComparisonData | null>(null);
-  const [shareholderGrowth, setShareholderGrowth] = useState<ShareholderGrowthData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [dates, setDates] = useState<string[]>([]);
   const [date1, setDate1] = useState('');
@@ -99,38 +68,22 @@ function AnalyticsContent() {
   const [isComparing, setIsComparing] = useState(false);
   const [activeTab, setActiveTab] = useState('trends');
   
-  // Shareholder growth filters
-  const [shareholderSearch, setShareholderSearch] = useState('');
-  const [selectedShareholderId, setSelectedShareholderId] = useState<string>('');
-  const [searchResults, setSearchResults] = useState<Array<{id: number; name: string}>>([]);
-  const [growthStartDate, setGrowthStartDate] = useState('');
-  const [growthEndDate, setGrowthEndDate] = useState('');
-  const [isLoadingGrowth, setIsLoadingGrowth] = useState(false);
+  // Period selection for new analytics
+  const [periodStartDate, setPeriodStartDate] = useState('');
+  const [periodEndDate, setPeriodEndDate] = useState('');
+  const [periodType, setPeriodType] = useState<'daily' | 'monthly'>('daily');
 
   useEffect(() => {
     fetchAnalytics();
     fetchDates();
     
-    // Handle URL parameters
-    const tab = searchParams.get('tab');
-    const shareholderId = searchParams.get('shareholderId');
-    const name = searchParams.get('name');
-    
-    if (tab) {
-      setActiveTab(tab);
-    }
-    
-    if (shareholderId && name) {
-      setSelectedShareholderId(shareholderId);
-      setShareholderSearch(name);
-      // Auto-fetch growth data if shareholder is pre-selected
-      setTimeout(() => {
-        if (shareholderId) {
-          fetchShareholderGrowthWithId(shareholderId);
-        }
-      }, 500);
-    }
-  }, [searchParams]);
+    // Set default period dates (last 30 days)
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    setPeriodEndDate(end.toISOString().split('T')[0]);
+    setPeriodStartDate(start.toISOString().split('T')[0]);
+  }, []);
 
   const fetchAnalytics = async () => {
     try {
@@ -186,85 +139,28 @@ function AnalyticsContent() {
     }
   };
 
-  const searchShareholders = async (query: string) => {
-    if (!query) {
-      setSearchResults([]);
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/shareholders/growth?search=${encodeURIComponent(query)}`);
-      if (response.ok) {
-        const data = await response.json();
-        setSearchResults(data.searchResults || []);
-      }
-    } catch (error) {
-      console.error('Error searching shareholders:', error);
-    }
+  const handleSetPeriodToMonth = () => {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    setPeriodStartDate(firstDay.toISOString().split('T')[0]);
+    setPeriodEndDate(now.toISOString().split('T')[0]);
   };
 
-  const fetchShareholderGrowth = async () => {
-    if (!selectedShareholderId) {
-      toast.error('Please select a shareholder');
-      return;
-    }
-
-    setIsLoadingGrowth(true);
-    try {
-      const params = new URLSearchParams({
-        shareholderId: selectedShareholderId,
-      });
-      
-      if (growthStartDate) params.append('startDate', growthStartDate);
-      if (growthEndDate) params.append('endDate', growthEndDate);
-
-      const response = await fetch(`/api/shareholders/growth?${params}`);
-      if (response.ok) {
-        const data = await response.json();
-        setShareholderGrowth(data);
-      } else {
-        toast.error('Failed to fetch growth data');
-      }
-    } catch (error) {
-      console.error('Error fetching growth data:', error);
-      toast.error('Failed to fetch growth data');
-    } finally {
-      setIsLoadingGrowth(false);
-    }
+  const handleSetPeriodToQuarter = () => {
+    const now = new Date();
+    const quarter = Math.floor(now.getMonth() / 3);
+    const firstMonth = quarter * 3;
+    const firstDay = new Date(now.getFullYear(), firstMonth, 1);
+    setPeriodStartDate(firstDay.toISOString().split('T')[0]);
+    setPeriodEndDate(now.toISOString().split('T')[0]);
   };
 
-  const fetchShareholderGrowthWithId = async (shareholderId: string) => {
-    setIsLoadingGrowth(true);
-    try {
-      const params = new URLSearchParams({
-        shareholderId: shareholderId,
-      });
-      
-      if (growthStartDate) params.append('startDate', growthStartDate);
-      if (growthEndDate) params.append('endDate', growthEndDate);
-
-      const response = await fetch(`/api/shareholders/growth?${params}`);
-      if (response.ok) {
-        const data = await response.json();
-        setShareholderGrowth(data);
-      } else {
-        toast.error('Failed to fetch growth data');
-      }
-    } catch (error) {
-      console.error('Error fetching growth data:', error);
-      toast.error('Failed to fetch growth data');
-    } finally {
-      setIsLoadingGrowth(false);
-    }
+  const handleSetPeriodToYear = () => {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), 0, 1);
+    setPeriodStartDate(firstDay.toISOString().split('T')[0]);
+    setPeriodEndDate(now.toISOString().split('T')[0]);
   };
-
-  useEffect(() => {
-    const debounceTimer = setTimeout(() => {
-      searchShareholders(shareholderSearch);
-    }, 300);
-
-    return () => clearTimeout(debounceTimer);
-  }, [shareholderSearch]);
 
   if (isLoading) {
     return (
@@ -278,30 +174,100 @@ function AnalyticsContent() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Analytics</h1>
-        <p className="text-gray-600">Analyze shareholder trends and distributions</p>
+        <p className="text-gray-600">Analyze shareholder patterns and behaviors</p>
       </div>
 
+      {/* Period Selector for New Analytics */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Period Selection</CardTitle>
+          <CardDescription>
+            Select the time period for analytics
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-5">
+            <div>
+              <Label htmlFor="start-date">Start Date</Label>
+              <Input
+                id="start-date"
+                type="date"
+                value={periodStartDate}
+                onChange={(e) => setPeriodStartDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label htmlFor="end-date">End Date</Label>
+              <Input
+                id="end-date"
+                type="date"
+                value={periodEndDate}
+                onChange={(e) => setPeriodEndDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label htmlFor="period-type">Period Type</Label>
+              <Select value={periodType} onValueChange={(value: 'daily' | 'monthly') => setPeriodType(value)}>
+                <SelectTrigger id="period-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="md:col-span-2">
+              <Label>Quick Select</Label>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={handleSetPeriodToMonth}>
+                  This Month
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleSetPeriodToQuarter}>
+                  This Quarter
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleSetPeriodToYear}>
+                  This Year
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-8">
           <TabsTrigger value="trends">
             <TrendingUp className="mr-2 h-4 w-4" />
             Trends
           </TabsTrigger>
-          <TabsTrigger value="distribution">
-            <PieChart className="mr-2 h-4 w-4" />
-            Distribution
+          <TabsTrigger value="buyers">
+            <TrendingUp className="mr-2 h-4 w-4" />
+            Buyers
+          </TabsTrigger>
+          <TabsTrigger value="sellers">
+            <TrendingDown className="mr-2 h-4 w-4" />
+            Sellers
+          </TabsTrigger>
+          <TabsTrigger value="new">
+            <UserPlus className="mr-2 h-4 w-4" />
+            New
+          </TabsTrigger>
+          <TabsTrigger value="patterns">
+            <Users2 className="mr-2 h-4 w-4" />
+            Patterns
+          </TabsTrigger>
+          <TabsTrigger value="timing">
+            <Target className="mr-2 h-4 w-4" />
+            Timing
           </TabsTrigger>
           <TabsTrigger value="comparison">
             <BarChart3 className="mr-2 h-4 w-4" />
-            Comparison
+            Compare
           </TabsTrigger>
           <TabsTrigger value="top">
             <Users className="mr-2 h-4 w-4" />
-            Top Shareholders
-          </TabsTrigger>
-          <TabsTrigger value="growth">
-            <TrendingUp className="mr-2 h-4 w-4" />
-            Individual Growth
+            Top
           </TabsTrigger>
         </TabsList>
 
@@ -383,58 +349,42 @@ function AnalyticsContent() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="distribution" className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Ownership Distribution</CardTitle>
-                <CardDescription>
-                  Distribution of shareholders by ownership percentage
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <RePieChart>
-                    <Pie
-                      data={analyticsData?.distribution || []}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={(entry) => `${entry.range}: ${entry.count}`}
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="count"
-                    >
-                      {analyticsData?.distribution.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </RePieChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+        <TabsContent value="buyers" className="space-y-4">
+          <ActiveBuyersAnalysis 
+            startDate={periodStartDate}
+            endDate={periodEndDate}
+            periodType={periodType}
+          />
+        </TabsContent>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Share Volume Distribution</CardTitle>
-                <CardDescription>
-                  Total shares held by each ownership group
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={analyticsData?.distribution || []}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="range" />
-                    <YAxis />
-                    <Tooltip formatter={(value: any) => value.toLocaleString()} />
-                    <Bar dataKey="totalShares" fill="#3b82f6" name="Total Shares" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
+        <TabsContent value="sellers" className="space-y-4">
+          <ActiveSellersAnalysis 
+            startDate={periodStartDate}
+            endDate={periodEndDate}
+            periodType={periodType}
+          />
+        </TabsContent>
+
+        <TabsContent value="new" className="space-y-4">
+          <NewShareholdersAnalysis 
+            startDate={periodStartDate}
+            endDate={periodEndDate}
+            periodType={periodType}
+          />
+        </TabsContent>
+
+        <TabsContent value="patterns" className="space-y-4">
+          <BehaviorPatterns 
+            startDate={periodStartDate}
+            endDate={periodEndDate}
+          />
+        </TabsContent>
+
+        <TabsContent value="timing" className="space-y-4">
+          <TimingAnalysis 
+            startDate={periodStartDate}
+            endDate={periodEndDate}
+          />
         </TabsContent>
 
         <TabsContent value="comparison" className="space-y-4">
@@ -573,232 +523,6 @@ function AnalyticsContent() {
                   <Bar dataKey="shares" fill="#3b82f6" name="Shares" />
                 </BarChart>
               </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="growth" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Shareholder Growth Analysis</CardTitle>
-              <CardDescription>
-                Track individual shareholder growth over time
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-4">
-                <div className="md:col-span-2">
-                  <Label htmlFor="shareholder-search">Search Shareholder</Label>
-                  <div className="relative">
-                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-500" />
-                    <Input
-                      id="shareholder-search"
-                      placeholder="Type shareholder name..."
-                      value={shareholderSearch}
-                      onChange={(e) => setShareholderSearch(e.target.value)}
-                      className="pl-8"
-                    />
-                  </div>
-                  {searchResults.length > 0 && (
-                    <div className="mt-2 border rounded-md max-h-48 overflow-y-auto">
-                      {searchResults.map((result) => (
-                        <button
-                          key={result.id}
-                          onClick={() => {
-                            setSelectedShareholderId(result.id.toString());
-                            setShareholderSearch(result.name);
-                            setSearchResults([]);
-                          }}
-                          className="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                        >
-                          {result.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <Label htmlFor="growth-start-date">Start Date</Label>
-                  <Input
-                    id="growth-start-date"
-                    type="date"
-                    value={growthStartDate}
-                    onChange={(e) => setGrowthStartDate(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="growth-end-date">End Date</Label>
-                  <Input
-                    id="growth-end-date"
-                    type="date"
-                    value={growthEndDate}
-                    onChange={(e) => setGrowthEndDate(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <Button 
-                onClick={fetchShareholderGrowth} 
-                disabled={!selectedShareholderId || isLoadingGrowth}
-                className="w-full md:w-auto"
-              >
-                {isLoadingGrowth && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Analyze Growth
-              </Button>
-
-              {shareholderGrowth && shareholderGrowth.growthData.length > 0 && (
-                <>
-                  {shareholderGrowth.metrics && (
-                    <div className="grid gap-4 md:grid-cols-4">
-                      <Card>
-                        <CardContent className="pt-6">
-                          <div className="text-2xl font-bold">
-                            {shareholderGrowth.metrics.finalShares.toLocaleString()}
-                          </div>
-                          <p className="text-xs text-muted-foreground">Current Shares</p>
-                          <p className="text-sm mt-2 flex items-center">
-                            {shareholderGrowth.metrics.sharesChange > 0 ? (
-                              <ArrowUp className="h-3 w-3 text-green-600 mr-1" />
-                            ) : shareholderGrowth.metrics.sharesChange < 0 ? (
-                              <ArrowDown className="h-3 w-3 text-red-600 mr-1" />
-                            ) : null}
-                            <span className={
-                              shareholderGrowth.metrics.sharesChange > 0 ? 'text-green-600' :
-                              shareholderGrowth.metrics.sharesChange < 0 ? 'text-red-600' : ''
-                            }>
-                              {shareholderGrowth.metrics.sharesChange > 0 ? '+' : ''}
-                              {shareholderGrowth.metrics.sharesChange.toLocaleString()}
-                            </span>
-                          </p>
-                        </CardContent>
-                      </Card>
-                      <Card>
-                        <CardContent className="pt-6">
-                          <div className="text-2xl font-bold">
-                            {shareholderGrowth.metrics.sharesChangePercent}%
-                          </div>
-                          <p className="text-xs text-muted-foreground">Growth Rate</p>
-                        </CardContent>
-                      </Card>
-                      <Card>
-                        <CardContent className="pt-6">
-                          <div className="text-2xl font-bold">
-                            {shareholderGrowth.metrics.finalPercentage.toFixed(4)}%
-                          </div>
-                          <p className="text-xs text-muted-foreground">Current Ownership</p>
-                          <p className="text-sm mt-2">
-                            <span className={
-                              shareholderGrowth.metrics.percentageChange > 0 ? 'text-green-600' :
-                              shareholderGrowth.metrics.percentageChange < 0 ? 'text-red-600' : ''
-                            }>
-                              {shareholderGrowth.metrics.percentageChange > 0 ? '+' : ''}
-                              {shareholderGrowth.metrics.percentageChange.toFixed(4)}%
-                            </span>
-                          </p>
-                        </CardContent>
-                      </Card>
-                      <Card>
-                        <CardContent className="pt-6">
-                          <div className="text-2xl font-bold">
-                            {shareholderGrowth.growthData.length}
-                          </div>
-                          <p className="text-xs text-muted-foreground">Data Points</p>
-                          <p className="text-xs mt-2 text-gray-500">
-                            {new Date(shareholderGrowth.metrics.dateRange.start).toLocaleDateString()} - 
-                            {new Date(shareholderGrowth.metrics.dateRange.end).toLocaleDateString()}
-                          </p>
-                        </CardContent>
-                      </Card>
-                    </div>
-                  )}
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Share Growth Over Time</CardTitle>
-                      <CardDescription>
-                        {shareholderGrowth.shareholder.name}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={400}>
-                        <LineChart data={shareholderGrowth.growthData}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis 
-                            dataKey="date" 
-                            tickFormatter={(value) => new Date(value).toLocaleDateString()}
-                          />
-                          <YAxis yAxisId="left" />
-                          <YAxis yAxisId="right" orientation="right" />
-                          <Tooltip 
-                            labelFormatter={(value) => new Date(value).toLocaleDateString()}
-                            formatter={(value: any, name: string) => [
-                              name === 'shares' ? value.toLocaleString() : `${value.toFixed(4)}%`,
-                              name === 'shares' ? 'Shares' : 'Ownership %'
-                            ]}
-                          />
-                          <Legend />
-                          <Line
-                            yAxisId="left"
-                            type="monotone"
-                            dataKey="shares"
-                            stroke="#3b82f6"
-                            name="Shares"
-                            strokeWidth={2}
-                            dot={{ r: 4 }}
-                            activeDot={{ r: 6 }}
-                          />
-                          <Line
-                            yAxisId="right"
-                            type="monotone"
-                            dataKey="percentage"
-                            stroke="#10b981"
-                            name="Ownership %"
-                            strokeWidth={2}
-                            dot={{ r: 4 }}
-                            activeDot={{ r: 6 }}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Ownership Percentage Trend</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={300}>
-                        <AreaChart data={shareholderGrowth.growthData}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis 
-                            dataKey="date" 
-                            tickFormatter={(value) => new Date(value).toLocaleDateString()}
-                          />
-                          <YAxis />
-                          <Tooltip 
-                            labelFormatter={(value) => new Date(value).toLocaleDateString()}
-                            formatter={(value: any) => `${value.toFixed(4)}%`}
-                          />
-                          <Area
-                            type="monotone"
-                            dataKey="percentage"
-                            stroke="#8b5cf6"
-                            fill="#8b5cf6"
-                            fillOpacity={0.3}
-                            name="Ownership %"
-                          />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
-                </>
-              )}
-
-              {shareholderGrowth && shareholderGrowth.growthData.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
-                  No data found for the selected shareholder and date range.
-                </div>
-              )}
             </CardContent>
           </Card>
         </TabsContent>

@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
 
     const formattedDates = dates
       .filter(d => d.date !== null)
-      .map(d => d.date!.toISOString().split('T')[0]);
+      .map(d => d.date!);
 
     return NextResponse.json({ dates: formattedDates });
   } catch (error) {

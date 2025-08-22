@@ -21,9 +21,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Download, TrendingUp } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Download } from 'lucide-react';
 import { toast } from 'sonner';
-import { useRouter } from 'next/navigation';
 
 interface Shareholder {
   id: number;
@@ -43,7 +42,6 @@ interface PaginationInfo {
 }
 
 export default function ShareholdersPage() {
-  const router = useRouter();
   const [shareholders, setShareholders] = useState<Shareholder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -129,15 +127,6 @@ export default function ShareholdersPage() {
     setPagination({ ...pagination, limit: parseInt(newLimit), page: 1 });
   };
 
-  const viewAnalytics = (shareholderId: number, shareholderName: string) => {
-    // Navigate to analytics page with shareholder pre-selected
-    const params = new URLSearchParams({
-      shareholderId: shareholderId.toString(),
-      name: shareholderName,
-      tab: 'growth'
-    });
-    router.push(`/dashboard/analytics?${params}`);
-  };
 
   const handleExport = async () => {
     try {
@@ -319,15 +308,7 @@ export default function ShareholdersPage() {
                         {new Date(shareholder.updatedAt).toLocaleDateString()}
                       </TableCell>
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => viewAnalytics(shareholder.id, shareholder.name)}
-                          className="h-8 px-2"
-                        >
-                          <TrendingUp className="h-4 w-4 mr-1" />
-                          Analytics
-                        </Button>
+                        -
                       </TableCell>
                     </TableRow>
                   ))

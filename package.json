@@ -9,7 +9,8 @@
     "lint": "next lint",
     "build:prod": "NODE_ENV=production next build",
     "vercel-build": "next build",
-    "postinstall": "node -e \"console.log('Dependencies installed successfully')\""
+    "postinstall": "node -e \"console.log('Dependencies installed successfully')\"",
+    "seed": "tsx scripts/seed-demo-data.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.1",
