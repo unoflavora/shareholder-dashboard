@@ -1,6 +1,6 @@
 'use client';
 
-import { Home, Users, Upload, BarChart3, Settings, LogOut, UserPlus } from 'lucide-react';
+import { Home, Users, Upload, BarChart3, LogOut, UserPlus } from 'lucide-react';
 import { useSession, signOut } from 'next-auth/react';
 import {
   Sidebar,
@@ -53,11 +53,6 @@ const adminNavItems = [
     title: 'User Management',
     icon: UserPlus,
     href: '/admin/users',
-  },
-  {
-    title: 'Settings',
-    icon: Settings,
-    href: '/admin/settings',
   },
 ];
 
