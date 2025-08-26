@@ -56,7 +56,7 @@ function AnalyticsContent() {
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('trends');
-  
+
   // Period selection for new analytics
   const [periodStartDate, setPeriodStartDate] = useState('');
   const [periodEndDate, setPeriodEndDate] = useState('');
@@ -64,7 +64,7 @@ function AnalyticsContent() {
 
   useEffect(() => {
     fetchAnalytics();
-    
+
     // Set default period dates (last 30 days)
     const end = new Date();
     const start = new Date();
@@ -154,18 +154,6 @@ function AnalyticsContent() {
                 onChange={(e) => setPeriodEndDate(e.target.value)}
               />
             </div>
-            <div>
-              <Label htmlFor="period-type">Period Type</Label>
-              <Select value={periodType} onValueChange={(value: 'daily' | 'monthly') => setPeriodType(value)}>
-                <SelectTrigger id="period-type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="daily">Daily</SelectItem>
-                  <SelectItem value="monthly">Monthly</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
             <div className="md:col-span-2">
               <Label>Quick Select</Label>
               <div className="flex gap-2">
@@ -228,13 +216,13 @@ function AnalyticsContent() {
               <ResponsiveContainer width="100%" height={400}>
                 <LineChart data={analyticsData?.trends || []}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis 
-                    dataKey="date" 
+                  <XAxis
+                    dataKey="date"
                     tickFormatter={(value) => new Date(value).toLocaleDateString()}
                   />
                   <YAxis yAxisId="left" />
                   <YAxis yAxisId="right" orientation="right" />
-                  <Tooltip 
+                  <Tooltip
                     labelFormatter={(value) => new Date(value).toLocaleDateString()}
                     formatter={(value: any) => value.toLocaleString()}
                   />
@@ -271,12 +259,12 @@ function AnalyticsContent() {
               <ResponsiveContainer width="100%" height={300}>
                 <AreaChart data={analyticsData?.trends || []}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis 
-                    dataKey="date" 
+                  <XAxis
+                    dataKey="date"
                     tickFormatter={(value) => new Date(value).toLocaleDateString()}
                   />
                   <YAxis />
-                  <Tooltip 
+                  <Tooltip
                     labelFormatter={(value) => new Date(value).toLocaleDateString()}
                     formatter={(value: any) => value.toLocaleString()}
                   />
@@ -295,7 +283,7 @@ function AnalyticsContent() {
         </TabsContent>
 
         <TabsContent value="buyers" className="space-y-4">
-          <ActiveBuyersAnalysis 
+          <ActiveBuyersAnalysis
             startDate={periodStartDate}
             endDate={periodEndDate}
             periodType={periodType}
@@ -303,7 +291,7 @@ function AnalyticsContent() {
         </TabsContent>
 
         <TabsContent value="sellers" className="space-y-4">
-          <ActiveSellersAnalysis 
+          <ActiveSellersAnalysis
             startDate={periodStartDate}
             endDate={periodEndDate}
             periodType={periodType}
@@ -311,7 +299,7 @@ function AnalyticsContent() {
         </TabsContent>
 
         <TabsContent value="new" className="space-y-4">
-          <NewShareholdersAnalysis 
+          <NewShareholdersAnalysis
             startDate={periodStartDate}
             endDate={periodEndDate}
             periodType={periodType}
@@ -319,14 +307,14 @@ function AnalyticsContent() {
         </TabsContent>
 
         <TabsContent value="patterns" className="space-y-4">
-          <BehaviorPatterns 
+          <BehaviorPatterns
             startDate={periodStartDate}
             endDate={periodEndDate}
           />
         </TabsContent>
 
         <TabsContent value="timing" className="space-y-4">
-          <TimingAnalysis 
+          <TimingAnalysis
             startDate={periodStartDate}
             endDate={periodEndDate}
           />
@@ -342,13 +330,13 @@ function AnalyticsContent() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={400}>
-                <BarChart 
+                <BarChart
                   data={analyticsData?.topShareholders || []}
                   margin={{ bottom: 80 }}
                 >
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis 
-                    dataKey="name" 
+                  <XAxis
+                    dataKey="name"
                     angle={-45}
                     textAnchor="end"
                     height={80}
@@ -359,35 +347,6 @@ function AnalyticsContent() {
                   <Tooltip formatter={(value: any) => value.toLocaleString()} />
                   <Legend />
                   <Bar dataKey="shares" fill="#3b82f6" name="Shares" />
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Ownership Distribution</CardTitle>
-              <CardDescription>
-                Percentage ownership of top shareholders
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={400}>
-                <BarChart data={analyticsData?.topShareholders || []}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis 
-                    dataKey="name" 
-                    angle={-45}
-                    textAnchor="end"
-                    height={100}
-                    tick={{ fontSize: 11 }}
-                  />
-                  <YAxis />
-                  <Tooltip 
-                    formatter={(value: any) => `${value.toFixed(2)}%`}
-                  />
-                  <Legend />
-                  <Bar dataKey="percentage" fill="#10b981" name="Ownership %" />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>

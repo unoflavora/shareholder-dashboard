@@ -26,6 +26,70 @@ import {
 } from 'recharts';
 import { Loader2, TrendingDown, Download } from 'lucide-react';
 import { toast } from 'sonner';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Pagination } from '@/components/ui/pagination';
+
+interface SellingActivity {
+  date: string;
+  decrease: number;
+  newTotal: number;
+}
+
+interface ActiveSeller {
+  shareholderId: number;
+  name: string;
+  initialShares: number;
+  finalShares: number;
+  totalDecrease: number;
+  decreasePercent: string;
+  initialOwnership: number;
+  finalOwnership: number;
+  ownershipChange: number;
+  exitStatus: string;
+  sellingDays: number;
+  averageDecreasePerSell: number;
+  firstDate: string;
+  lastDate: string;
+  sellingActivity: SellingActivity[];
+}
+
+interface TrendData {
+  date: string;
+  activeSellers: number;
+  sharesSold: number;
+  fullExits: number;
+  partialExits: number;
+}
+
+interface Summary {
+  totalActiveSellers: number;
+  fullExits: number;
+  partialExits: number;
+  totalSharesSold: number;
+  averageDecrease: number;
+  topSeller: ActiveSeller | null;
+  period: {
+    start: string;
+    end: string;
+    type: string;
+  };
+}
+
+interface PaginationInfo {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+interface ActiveSellersData {
+  summary: Summary;
+  sellers: ActiveSeller[];
+  trendData: TrendData[];
+  pagination: PaginationInfo;
+}
 
 interface ActiveSellersProps {
   startDate: string;
@@ -34,8 +98,19 @@ interface ActiveSellersProps {
 }
 
 export default function ActiveSellersAnalysis({ startDate, endDate, periodType }: ActiveSellersProps) {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<ActiveSellersData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [dateFilter, setDateFilter] = useState('');
+
+  const handleChartClick = (data: any) => {
+    if (data && data.activePayload && data.activePayload.length > 0) {
+      const clickedDate = data.activePayload[0].payload.date;
+      setDateFilter(clickedDate);
+      setCurrentPage(1);
+    }
+  };
 
   const fetchData = async () => {
     if (!startDate || !endDate) return;
@@ -45,8 +120,14 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
       const params = new URLSearchParams({
         startDate,
         endDate,
-        periodType
+        periodType,
+        page: currentPage.toString(),
+        limit: pageSize.toString()
       });
+      
+      if (dateFilter) {
+        params.append('sellerDateFilter', dateFilter);
+      }
       
       const response = await fetch(`/api/analytics/active-sellers?${params}`);
       if (response.ok) {
@@ -65,14 +146,14 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
 
   useEffect(() => {
     fetchData();
-  }, [startDate, endDate, periodType]);
+  }, [startDate, endDate, periodType, currentPage, pageSize, dateFilter]);
 
   const exportData = () => {
     if (!data) return;
     
     const csv = [
       ['Name', 'Initial Shares', 'Final Shares', 'Total Decrease', 'Decrease %', 'Exit Status', 'Selling Days'],
-      ...data.sellers.map((seller: any) => [
+      ...data.sellers.map((seller: ActiveSeller) => [
         seller.name,
         seller.initialShares,
         seller.finalShares,
@@ -105,7 +186,7 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
     }
   };
 
-  if (isLoading) {
+  if (!data && isLoading) {
     return (
       <div className="flex items-center justify-center p-8">
         <Loader2 className="h-8 w-8 animate-spin" />
@@ -162,7 +243,7 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
         <CardHeader>
           <CardTitle>Selling Activity Trend</CardTitle>
           <CardDescription>
-            Number of active sellers and exit patterns over time
+            Number of active sellers and exit patterns over time. Click on any point to filter the table by that date.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -191,6 +272,8 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
                 stroke="#ef4444"
                 name="Active Sellers"
                 strokeWidth={2}
+                onClick={handleChartClick}
+                style={{ cursor: 'pointer' }}
               />
               <Line
                 yAxisId="right"
@@ -199,6 +282,8 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
                 stroke="#f97316"
                 name="Shares Sold"
                 strokeWidth={2}
+                onClick={handleChartClick}
+                style={{ cursor: 'pointer' }}
               />
               <Line
                 yAxisId="left"
@@ -208,6 +293,8 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
                 name="Full Exits"
                 strokeWidth={2}
                 strokeDasharray="5 5"
+                onClick={handleChartClick}
+                style={{ cursor: 'pointer' }}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -219,7 +306,7 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
         <CardHeader>
           <CardTitle>Exit Pattern Distribution</CardTitle>
           <CardDescription>
-            Breakdown of full vs partial exits over time
+            Breakdown of full vs partial exits over time. Click on any bar to filter the table by that date.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -239,8 +326,22 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
                 }
               />
               <Legend />
-              <Bar dataKey="fullExits" stackId="a" fill="#dc2626" name="Full Exits" />
-              <Bar dataKey="partialExits" stackId="a" fill="#fb923c" name="Partial Exits" />
+              <Bar 
+                dataKey="fullExits" 
+                stackId="a" 
+                fill="#dc2626" 
+                name="Full Exits"
+                onClick={handleChartClick}
+                style={{ cursor: 'pointer' }}
+              />
+              <Bar 
+                dataKey="partialExits" 
+                stackId="a" 
+                fill="#fb923c" 
+                name="Partial Exits"
+                onClick={handleChartClick}
+                style={{ cursor: 'pointer' }}
+              />
             </BarChart>
           </ResponsiveContainer>
         </CardContent>
@@ -256,10 +357,58 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
                 Shareholders who reduced or exited their positions
               </CardDescription>
             </div>
-            <Button onClick={exportData} variant="outline" size="sm">
-              <Download className="mr-2 h-4 w-4" />
-              Export CSV
-            </Button>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="date-filter">Filter by selling date:</Label>
+                <Input
+                  id="date-filter"
+                  type="date"
+                  value={dateFilter}
+                  onChange={(e) => {
+                    setDateFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-40"
+                  placeholder="Click chart or select date"
+                />
+                {dateFilter && (
+                  <Button
+                    onClick={() => {
+                      setDateFilter('');
+                      setCurrentPage(1);
+                    }}
+                    variant="outline"
+                    size="sm"
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="page-size">Show:</Label>
+                <Select
+                  value={pageSize.toString()}
+                  onValueChange={(value) => {
+                    setPageSize(parseInt(value));
+                    setCurrentPage(1);
+                  }}
+                >
+                  <SelectTrigger className="w-20">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10">10</SelectItem>
+                    <SelectItem value="25">25</SelectItem>
+                    <SelectItem value="50">50</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button onClick={exportData} variant="outline" size="sm">
+                <Download className="mr-2 h-4 w-4" />
+                Export CSV
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -277,28 +426,51 @@ export default function ActiveSellersAnalysis({ startDate, endDate, periodType }
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.sellers.slice(0, 20).map((seller: any) => (
-                  <TableRow key={seller.shareholderId}>
-                    <TableCell className="font-medium">{seller.name}</TableCell>
-                    <TableCell className="text-right">
-                      {seller.initialShares.toLocaleString()}
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-8">
+                      <div className="flex items-center justify-center">
+                        <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                        Loading...
+                      </div>
                     </TableCell>
-                    <TableCell className="text-right">
-                      {seller.finalShares.toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right text-red-600">
-                      -{seller.totalDecrease.toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {seller.decreasePercent}%
-                    </TableCell>
-                    <TableCell>{getExitStatusBadge(seller.exitStatus)}</TableCell>
-                    <TableCell className="text-right">{seller.sellingDays}</TableCell>
                   </TableRow>
-                ))}
+                ) : data.sellers.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-8 text-gray-500">
+                      No active sellers found
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  data.sellers.map((seller: ActiveSeller) => (
+                    <TableRow key={seller.shareholderId}>
+                      <TableCell className="font-medium">{seller.name}</TableCell>
+                      <TableCell className="text-right">
+                        {seller.initialShares.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {seller.finalShares.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right text-red-600">
+                        -{seller.totalDecrease.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {seller.decreasePercent}%
+                      </TableCell>
+                      <TableCell>{getExitStatusBadge(seller.exitStatus)}</TableCell>
+                      <TableCell className="text-right">{seller.sellingDays}</TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
           </div>
+
+          <Pagination 
+            pagination={data.pagination}
+            onPageChange={setCurrentPage}
+            isLoading={isLoading}
+          />
         </CardContent>
       </Card>
     </div>

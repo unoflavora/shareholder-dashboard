@@ -16,6 +16,9 @@ export async function GET(request: NextRequest) {
     const startDate = searchParams.get('startDate');
     const endDate = searchParams.get('endDate');
     const periodType = searchParams.get('periodType') || 'daily';
+    const page = parseInt(searchParams.get('page') || '1', 10);
+    const limit = parseInt(searchParams.get('limit') || '10', 10);
+    const entryDateFilter = searchParams.get('entryDateFilter');
 
     if (!startDate || !endDate) {
       return NextResponse.json({ error: 'Start date and end date are required' }, { status: 400 });
@@ -113,6 +116,21 @@ export async function GET(request: NextRequest) {
       return b.initialShares - a.initialShares;
     });
 
+    // Apply entry date filter if provided
+    let filteredShareholders = newShareholders;
+    if (entryDateFilter) {
+      filteredShareholders = newShareholders.filter(shareholder => 
+        shareholder.entryDate >= entryDateFilter
+      );
+    }
+
+    // Calculate pagination
+    const totalShareholders = filteredShareholders.length;
+    const totalPages = Math.ceil(totalShareholders / limit);
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedShareholders = filteredShareholders.slice(startIndex, endIndex);
+
     // Calculate entry trend data for chart
     const entryTrendData = [];
     const entryDateMap = new Map();
@@ -181,8 +199,14 @@ export async function GET(request: NextRequest) {
           type: periodType
         }
       },
-      newShareholders: newShareholders.slice(0, 100), // Limit to 100
-      entryTrendData
+      newShareholders: paginatedShareholders,
+      entryTrendData,
+      pagination: {
+        page,
+        limit,
+        total: totalShareholders,
+        totalPages
+      }
     });
   } catch (error) {
     console.error('Error fetching new shareholders:', error);

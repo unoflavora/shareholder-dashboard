@@ -16,6 +16,9 @@ export async function GET(request: NextRequest) {
     const startDate = searchParams.get('startDate');
     const endDate = searchParams.get('endDate');
     const periodType = searchParams.get('periodType') || 'daily'; // daily or monthly
+    const page = parseInt(searchParams.get('page') || '1', 10);
+    const limit = parseInt(searchParams.get('limit') || '10', 10);
+    const buyerDateFilter = searchParams.get('buyerDateFilter');
 
     if (!startDate || !endDate) {
       return NextResponse.json({ error: 'Start date and end date are required' }, { status: 400 });
@@ -113,6 +116,23 @@ export async function GET(request: NextRequest) {
     // Sort by total increase (most active buyers first)
     activeBuyers.sort((a, b) => b.totalIncrease - a.totalIncrease);
 
+    // Apply buyer date filter if provided
+    let filteredBuyers = activeBuyers;
+    if (buyerDateFilter) {
+      filteredBuyers = activeBuyers.filter(buyer => {
+        return buyer.buyingActivity.some(activity => 
+          activity.date >= buyerDateFilter
+        );
+      });
+    }
+
+    // Calculate pagination
+    const totalBuyers = filteredBuyers.length;
+    const totalPages = Math.ceil(totalBuyers / limit);
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedBuyers = filteredBuyers.slice(startIndex, endIndex);
+
     // Calculate summary statistics
     const totalActiveBuyers = activeBuyers.length;
     const totalSharesAccumulated = activeBuyers.reduce((sum, buyer) => sum + buyer.totalIncrease, 0);
@@ -165,8 +185,14 @@ export async function GET(request: NextRequest) {
           type: periodType
         }
       },
-      buyers: activeBuyers.slice(0, 100), // Limit to top 100
-      trendData
+      buyers: paginatedBuyers,
+      trendData,
+      pagination: {
+        page,
+        limit,
+        total: totalBuyers,
+        totalPages
+      }
     });
   } catch (error) {
     console.error('Error fetching active buyers:', error);

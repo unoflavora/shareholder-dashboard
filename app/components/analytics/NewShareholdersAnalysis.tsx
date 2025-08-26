@@ -26,6 +26,67 @@ import {
 } from 'recharts';
 import { Loader2, UserPlus, Download, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { toast } from 'sonner';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Pagination } from '@/components/ui/pagination';
+
+interface NewShareholder {
+  shareholderId: number;
+  name: string;
+  entryDate: string;
+  initialShares: number;
+  currentShares: number;
+  growthSinceEntry: number;
+  growthPercent: string;
+  initialOwnership: number;
+  currentOwnership: number;
+  ownershipChange: number;
+  daysActive: number;
+  trajectory: string;
+}
+
+interface EntryTrendData {
+  date: string;
+  newEntrants: number;
+  totalInitialShares: number;
+  totalCurrentShares: number;
+  averageEntry: number;
+  entrantNames: string[];
+}
+
+interface Summary {
+  totalNewShareholders: number;
+  totalInitialInvestment: number;
+  totalCurrentHoldings: number;
+  netChange: number;
+  averageEntrySize: number;
+  trajectories: {
+    accumulating: number;
+    reducing: number;
+    stable: number;
+  };
+  topNewEntrant: NewShareholder | null;
+  period: {
+    start: string;
+    end: string;
+    type: string;
+  };
+}
+
+interface PaginationInfo {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+interface NewShareholdersData {
+  summary: Summary;
+  newShareholders: NewShareholder[];
+  entryTrendData: EntryTrendData[];
+  pagination: PaginationInfo;
+}
 
 interface NewShareholdersProps {
   startDate: string;
@@ -34,8 +95,19 @@ interface NewShareholdersProps {
 }
 
 export default function NewShareholdersAnalysis({ startDate, endDate, periodType }: NewShareholdersProps) {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<NewShareholdersData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [dateFilter, setDateFilter] = useState('');
+
+  const handleChartClick = (data: any) => {
+    if (data && data.activePayload && data.activePayload.length > 0) {
+      const clickedDate = data.activePayload[0].payload.date;
+      setDateFilter(clickedDate);
+      setCurrentPage(1);
+    }
+  };
 
   const fetchData = async () => {
     if (!startDate || !endDate) return;
@@ -45,8 +117,14 @@ export default function NewShareholdersAnalysis({ startDate, endDate, periodType
       const params = new URLSearchParams({
         startDate,
         endDate,
-        periodType
+        periodType,
+        page: currentPage.toString(),
+        limit: pageSize.toString()
       });
+      
+      if (dateFilter) {
+        params.append('entryDateFilter', dateFilter);
+      }
       
       const response = await fetch(`/api/analytics/new-shareholders?${params}`);
       if (response.ok) {
@@ -65,14 +143,14 @@ export default function NewShareholdersAnalysis({ startDate, endDate, periodType
 
   useEffect(() => {
     fetchData();
-  }, [startDate, endDate, periodType]);
+  }, [startDate, endDate, periodType, currentPage, pageSize, dateFilter]);
 
   const exportData = () => {
     if (!data) return;
     
     const csv = [
       ['Name', 'Entry Date', 'Initial Shares', 'Current Shares', 'Growth', 'Growth %', 'Trajectory'],
-      ...data.newShareholders.map((shareholder: any) => [
+      ...data.newShareholders.map((shareholder: NewShareholder) => [
         shareholder.name,
         shareholder.entryDate,
         shareholder.initialShares,
@@ -114,7 +192,7 @@ export default function NewShareholdersAnalysis({ startDate, endDate, periodType
     }
   };
 
-  if (isLoading) {
+  if (!data && isLoading) {
     return (
       <div className="flex items-center justify-center p-8">
         <Loader2 className="h-8 w-8 animate-spin" />
@@ -221,7 +299,7 @@ export default function NewShareholdersAnalysis({ startDate, endDate, periodType
         <CardHeader>
           <CardTitle>New Shareholder Entry Trend</CardTitle>
           <CardDescription>
-            Number of new shareholders entering over time
+            Number of new shareholders entering over time. Click on any point to filter the table by that date.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -272,6 +350,8 @@ export default function NewShareholdersAnalysis({ startDate, endDate, periodType
                 stroke="#3b82f6"
                 name="New Entrants"
                 strokeWidth={2}
+                onClick={handleChartClick}
+                style={{ cursor: 'pointer' }}
               />
               <Line
                 yAxisId="right"
@@ -280,6 +360,8 @@ export default function NewShareholdersAnalysis({ startDate, endDate, periodType
                 stroke="#10b981"
                 name="Total Initial Shares"
                 strokeWidth={2}
+                onClick={handleChartClick}
+                style={{ cursor: 'pointer' }}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -291,7 +373,7 @@ export default function NewShareholdersAnalysis({ startDate, endDate, periodType
         <CardHeader>
           <CardTitle>New Shareholder Investment Volume</CardTitle>
           <CardDescription>
-            Initial vs current holdings of new shareholders
+            Initial vs current holdings of new shareholders. Click on any bar to filter the table by that date.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -312,8 +394,20 @@ export default function NewShareholdersAnalysis({ startDate, endDate, periodType
                 formatter={(value: any) => value.toLocaleString()}
               />
               <Legend />
-              <Bar dataKey="totalInitialShares" fill="#3b82f6" name="Initial Shares" />
-              <Bar dataKey="totalCurrentShares" fill="#10b981" name="Current Shares" />
+              <Bar 
+                dataKey="totalInitialShares" 
+                fill="#3b82f6" 
+                name="Initial Shares"
+                onClick={handleChartClick}
+                style={{ cursor: 'pointer' }}
+              />
+              <Bar 
+                dataKey="totalCurrentShares" 
+                fill="#10b981" 
+                name="Current Shares"
+                onClick={handleChartClick}
+                style={{ cursor: 'pointer' }}
+              />
             </BarChart>
           </ResponsiveContainer>
         </CardContent>
@@ -329,10 +423,58 @@ export default function NewShareholdersAnalysis({ startDate, endDate, periodType
                 Shareholders who entered during the period
               </CardDescription>
             </div>
-            <Button onClick={exportData} variant="outline" size="sm">
-              <Download className="mr-2 h-4 w-4" />
-              Export CSV
-            </Button>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="date-filter">Filter by entry date:</Label>
+                <Input
+                  id="date-filter"
+                  type="date"
+                  value={dateFilter}
+                  onChange={(e) => {
+                    setDateFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-40"
+                  placeholder="Click chart or select date"
+                />
+                {dateFilter && (
+                  <Button
+                    onClick={() => {
+                      setDateFilter('');
+                      setCurrentPage(1);
+                    }}
+                    variant="outline"
+                    size="sm"
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="page-size">Show:</Label>
+                <Select
+                  value={pageSize.toString()}
+                  onValueChange={(value) => {
+                    setPageSize(parseInt(value));
+                    setCurrentPage(1);
+                  }}
+                >
+                  <SelectTrigger className="w-20">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10">10</SelectItem>
+                    <SelectItem value="25">25</SelectItem>
+                    <SelectItem value="50">50</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button onClick={exportData} variant="outline" size="sm">
+                <Download className="mr-2 h-4 w-4" />
+                Export CSV
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -350,31 +492,54 @@ export default function NewShareholdersAnalysis({ startDate, endDate, periodType
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.newShareholders.slice(0, 20).map((shareholder: any) => (
-                  <TableRow key={shareholder.shareholderId}>
-                    <TableCell className="font-medium">{shareholder.name}</TableCell>
-                    <TableCell>{new Date(shareholder.entryDate).toLocaleDateString()}</TableCell>
-                    <TableCell className="text-right">
-                      {shareholder.initialShares.toLocaleString()}
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-8">
+                      <div className="flex items-center justify-center">
+                        <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                        Loading...
+                      </div>
                     </TableCell>
-                    <TableCell className="text-right">
-                      {shareholder.currentShares.toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <span className={shareholder.growthSinceEntry >= 0 ? 'text-green-600' : 'text-red-600'}>
-                        {shareholder.growthSinceEntry >= 0 ? '+' : ''}
-                        {shareholder.growthSinceEntry.toLocaleString()}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {shareholder.growthPercent}%
-                    </TableCell>
-                    <TableCell>{getTrajectoryBadge(shareholder.trajectory)}</TableCell>
                   </TableRow>
-                ))}
+                ) : data.newShareholders.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-8 text-gray-500">
+                      No new shareholders found
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  data.newShareholders.map((shareholder: NewShareholder) => (
+                    <TableRow key={shareholder.shareholderId}>
+                      <TableCell className="font-medium">{shareholder.name}</TableCell>
+                      <TableCell>{new Date(shareholder.entryDate).toLocaleDateString()}</TableCell>
+                      <TableCell className="text-right">
+                        {shareholder.initialShares.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {shareholder.currentShares.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <span className={shareholder.growthSinceEntry >= 0 ? 'text-green-600' : 'text-red-600'}>
+                          {shareholder.growthSinceEntry >= 0 ? '+' : ''}
+                          {shareholder.growthSinceEntry.toLocaleString()}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {shareholder.growthPercent}%
+                      </TableCell>
+                      <TableCell>{getTrajectoryBadge(shareholder.trajectory)}</TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
           </div>
+
+          <Pagination 
+            pagination={data.pagination}
+            onPageChange={setCurrentPage}
+            isLoading={isLoading}
+          />
         </CardContent>
       </Card>
     </div>

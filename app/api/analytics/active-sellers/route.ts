@@ -16,6 +16,9 @@ export async function GET(request: NextRequest) {
     const startDate = searchParams.get('startDate');
     const endDate = searchParams.get('endDate');
     const periodType = searchParams.get('periodType') || 'daily';
+    const page = parseInt(searchParams.get('page') || '1', 10);
+    const limit = parseInt(searchParams.get('limit') || '10', 10);
+    const sellerDateFilter = searchParams.get('sellerDateFilter');
 
     if (!startDate || !endDate) {
       return NextResponse.json({ error: 'Start date and end date are required' }, { status: 400 });
@@ -172,6 +175,23 @@ export async function GET(request: NextRequest) {
     // Sort by total decrease (most active sellers first)
     activeSellers.sort((a, b) => b.totalDecrease - a.totalDecrease);
 
+    // Apply seller date filter if provided
+    let filteredSellers = activeSellers;
+    if (sellerDateFilter) {
+      filteredSellers = activeSellers.filter(seller => {
+        return seller.sellingActivity.some(activity => 
+          activity.date >= sellerDateFilter
+        );
+      });
+    }
+
+    // Calculate pagination
+    const totalSellers = filteredSellers.length;
+    const totalPages = Math.ceil(totalSellers / limit);
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedSellers = filteredSellers.slice(startIndex, endIndex);
+
     // Calculate summary statistics
     const totalActiveSellers = activeSellers.length;
     const fullExits = activeSellers.filter(s => s.exitStatus === 'Full Exit' || s.exitStatus === 'Complete Disappearance').length;
@@ -238,8 +258,14 @@ export async function GET(request: NextRequest) {
           type: periodType
         }
       },
-      sellers: activeSellers.slice(0, 100), // Limit to top 100
-      trendData
+      sellers: paginatedSellers,
+      trendData,
+      pagination: {
+        page,
+        limit,
+        total: totalSellers,
+        totalPages
+      }
     });
   } catch (error) {
     console.error('Error fetching active sellers:', error);
