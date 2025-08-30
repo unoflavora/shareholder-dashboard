@@ -44,23 +44,29 @@ export async function POST(req: NextRequest) {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create new user
-    const newUser = await db
+    await db
       .insert(users)
       .values({
         email,
         password: hashedPassword,
         name,
         isAdmin: false,
-      })
-      .returning();
+      });
+
+    // Get the newly created user
+    const [newUser] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
 
     return NextResponse.json(
       {
         message: 'User created successfully',
         user: {
-          id: newUser[0].id,
-          email: newUser[0].email,
-          name: newUser[0].name,
+          id: newUser.id,
+          email: newUser.email,
+          name: newUser.name,
         },
       },
       { status: 201 }

@@ -24,6 +24,7 @@ export async function GET(req: NextRequest) {
     let query = db
       .select({
         name: shareholders.name,
+        accountHolder: shareholders.accountHolder,
         shares: shareholdings.sharesAmount,
         percentage: shareholdings.percentage,
         date: shareholdings.date,
@@ -45,9 +46,10 @@ export async function GET(req: NextRequest) {
     const results = await query;
 
     // Convert to CSV
-    const csvHeaders = ['Name', 'Shares', 'Percentage', 'Date'];
+    const csvHeaders = ['Name', 'Account Holder', 'Shares', 'Percentage', 'Date'];
     const csvRows = results.map(row => [
       row.name,
+      row.accountHolder || '',
       row.shares || '',
       row.percentage || '',
       row.date ? new Date(row.date).toLocaleDateString() : '',

@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db/client';
 import { shareholders, shareholdings, uploads, auditLogs } from '@/lib/db/schema';
-import { eq, inArray, and } from 'drizzle-orm';
+import { eq, inArray, and, sql, desc } from 'drizzle-orm';
 import * as XLSX from 'xlsx';
 
 export async function POST(req: NextRequest) {
@@ -18,11 +18,10 @@ export async function POST(req: NextRequest) {
 
   const formData = await req.formData();
   const file = formData.get('file') as File;
-  const uploadDate = formData.get('date') as string;
 
-  if (!file || !uploadDate) {
+  if (!file) {
     return NextResponse.json(
-      { error: 'File and date are required' },
+      { error: 'File is required' },
       { status: 400 }
     );
   }
@@ -54,48 +53,105 @@ export async function POST(req: NextRequest) {
       
       if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
         const workbook = XLSX.read(buffer, { type: 'buffer' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
         
-        const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
-        
-        // Find header row
-        let headerRowIndex = -1;
-        for (let i = 0; i < Math.min(10, rawData.length); i++) {
-          const row = rawData[i];
-          if (row && row.some(cell => 
-            cell && String(cell).toLowerCase().includes('nama')
-          )) {
-            headerRowIndex = i;
-            break;
+        // Process all sheets in the workbook
+        for (const sheetName of workbook.SheetNames) {
+          const worksheet = workbook.Sheets[sheetName];
+          const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+          
+          // Skip empty sheets or sheets with fewer than 3 rows
+          if (rawData.length < 3) {
+            await sendProgress({ 
+              type: 'info', 
+              message: `Skipping sheet "${sheetName}" - insufficient rows (${rawData.length})` 
+            });
+            continue;
           }
-        }
-        
-        if (headerRowIndex === -1) {
-          await sendProgress({ 
-            type: 'error', 
-            message: 'Could not find header row in file' 
-          });
-          await writer.close();
-          return;
-        }
-        
-        const headers = rawData[headerRowIndex].map(h => String(h || '').trim());
-        
-        // Parse data rows
-        for (let i = headerRowIndex + 1; i < rawData.length; i++) {
-          const row = rawData[i];
-          if (!row || row.length === 0 || !row[0]) continue;
           
-          const obj: any = {};
-          headers.forEach((header, index) => {
-            if (row[index] !== undefined && row[index] !== null && row[index] !== '') {
-              obj[header] = row[index];
+          // Extract date from row 3 for this specific sheet
+          let sheetDate: string | null = null;
+          if (rawData[2]) {
+            // Check column A first (index 0), then column B (index 1) for date
+            const possibleDateCells = [rawData[2][0], rawData[2][1]].filter(cell => cell != null && cell !== '');
+            
+            for (const dateCell of possibleDateCells) {
+              if (dateCell instanceof Date) {
+                sheetDate = dateCell.toISOString().split('T')[0];
+                break;
+              } else if (typeof dateCell === 'number') {
+                // Handle Excel serial date numbers (days since January 1, 1900)
+                if (dateCell > 25569 && dateCell < 50000) { // reasonable range for 1970-2036
+                  const excelDate = new Date((dateCell - 25569) * 86400 * 1000);
+                  if (!isNaN(excelDate.getTime())) {
+                    sheetDate = excelDate.toISOString().split('T')[0];
+                    break;
+                  }
+                }
+              } else if (typeof dateCell === 'string') {
+                const dateStr = String(dateCell);
+                const dateMatch = dateStr.match(/(\d{4}-\d{2}-\d{2})|(\d{2}\/\d{2}\/\d{4})|(\d{4}\/\d{2}\/\d{2})/);
+                if (dateMatch) {
+                  const dateValue = new Date(dateMatch[0]);
+                  if (!isNaN(dateValue.getTime())) {
+                    sheetDate = dateValue.toISOString().split('T')[0];
+                    break;
+                  }
+                }
+              }
             }
+          }
+          
+          // Error if no date found in this sheet
+          if (!sheetDate) {
+            await sendProgress({ 
+              type: 'error', 
+              message: `No date found in sheet "${sheetName}" at row 3. Please ensure the date is in column A or B of row 3.` 
+            });
+            await writer.close();
+            return;
+          }
+          
+          await sendProgress({ 
+            type: 'info', 
+            message: `Processing sheet "${sheetName}" with date: ${sheetDate}` 
           });
           
-          if (Object.keys(obj).length > 1 && obj['Nama']) {
-            data.push(obj);
+          // Find header row
+          let headerRowIndex = -1;
+          for (let i = 0; i < Math.min(10, rawData.length); i++) {
+            const row = rawData[i];
+            if (row && row.some(cell => 
+              cell && String(cell).toLowerCase().includes('nama')
+            )) {
+              headerRowIndex = i;
+              break;
+            }
+          }
+          
+          if (headerRowIndex === -1) {
+            continue;
+          }
+          
+          const headers = rawData[headerRowIndex].map(h => String(h || '').trim());
+          
+          // Parse data rows
+          for (let i = headerRowIndex + 1; i < rawData.length; i++) {
+            const row = rawData[i];
+            if (!row || row.length === 0 || !row[0]) continue;
+            
+            const obj: any = {};
+            headers.forEach((header, index) => {
+              if (row[index] !== undefined && row[index] !== null && row[index] !== '') {
+                obj[header] = row[index];
+              }
+            });
+            
+            if (Object.keys(obj).length > 1 && obj['Nama']) {
+              obj._sheetName = sheetName;
+              obj._accountHolder = obj['Nama Pemegang Rekening'] || '';
+              obj._extractedDate = sheetDate; // Store the date for this specific sheet
+              data.push(obj);
+            }
           }
         }
       }
@@ -115,38 +171,104 @@ export async function POST(req: NextRequest) {
         totalRows: data.length 
       });
 
-      const dateString = new Date(uploadDate).toISOString().split('T')[0];
+      // Group data by date
+      const dataByDate = new Map<string, any[]>();
+      data.forEach(row => {
+        const date = row._extractedDate;
+        if (!dataByDate.has(date)) {
+          dataByDate.set(date, []);
+        }
+        dataByDate.get(date)!.push(row);
+      });
+
+      const uniqueDates = Array.from(dataByDate.keys());
+      await sendProgress({ 
+        type: 'info', 
+        message: `Found ${uniqueDates.length} unique dates: ${uniqueDates.join(', ')}` 
+      });
       
-      // Create upload record
+      // Create upload record - use today's date for the upload record itself
       await sendProgress({ type: 'database', message: 'Creating upload record...' });
       
-      const [uploadRecord] = await db.insert(uploads).values({
+      const uploadDateString = new Date().toISOString().split('T')[0];
+      await db.insert(uploads).values({
         filename: file.name,
-        uploadDate: dateString,
+        uploadDate: uploadDateString,
         recordsCount: data.length,
         uploadedBy: parseInt(session.user.id),
         status: 'processing',
-      }).returning();
+      });
+      
+      // Get the inserted upload record
+      const [uploadRecord] = await db
+        .select()
+        .from(uploads)
+        .orderBy(desc(uploads.id))
+        .limit(1);
 
-      // Prepare data for batch processing
-      const shareholderNames = [...new Set(data.map(row => row['Nama']))].filter(Boolean);
+      // Prepare data for batch processing with account holders
+      const shareholderData = new Map();
+      data.forEach(row => {
+        const name = row['Nama'];
+        if (name && !shareholderData.has(name)) {
+          shareholderData.set(name, {
+            name,
+            accountHolder: row._accountHolder || null
+          });
+        }
+      });
+      const shareholderNames = Array.from(shareholderData.keys());
       
       await sendProgress({ 
         type: 'checking', 
         message: `Checking ${shareholderNames.length} unique shareholders...` 
       });
 
-      // Get existing shareholders
-      const existingShareholders = await db
-        .select()
-        .from(shareholders)
-        .where(inArray(shareholders.name, shareholderNames));
+      // Process in smaller chunks to avoid stack overflow
+      const CHUNK_SIZE = 50;
+      const existingShareholderMap = new Map();
       
-      const existingShareholderMap = new Map(
-        existingShareholders.map(s => [s.name, s])
-      );
+      // Process shareholder names in chunks
+      for (let i = 0; i < shareholderNames.length; i += CHUNK_SIZE) {
+        const chunk = shareholderNames.slice(i, i + CHUNK_SIZE);
+        
+        // Get existing shareholders for this chunk
+        const existingShareholders = await db
+          .select()
+          .from(shareholders)
+          .where(inArray(shareholders.name, chunk));
+        
+        // Add to map and update account holders if needed
+        existingShareholders.forEach(s => {
+          existingShareholderMap.set(s.name, s);
+        });
+        
+        // Update existing shareholders with account holder info if missing
+        const shareholdersToUpdate = existingShareholders.filter(s => {
+          const newAccountHolder = shareholderData.get(s.name)?.accountHolder;
+          return newAccountHolder && (!s.accountHolder || s.accountHolder !== newAccountHolder);
+        });
+        
+        if (shareholdersToUpdate.length > 0) {
+          for (const shareholder of shareholdersToUpdate) {
+            const newAccountHolder = shareholderData.get(shareholder.name)?.accountHolder;
+            if (newAccountHolder) {
+              await db
+                .update(shareholders)
+                .set({ accountHolder: newAccountHolder })
+                .where(eq(shareholders.id, shareholder.id));
+              
+              // Update the map with the new account holder
+              existingShareholderMap.set(shareholder.name, {
+                ...shareholder,
+                accountHolder: newAccountHolder
+              });
+            }
+          }
+        }
+      }
 
-      // Prepare new shareholders
+      // Find new shareholders
       const newShareholderNames = shareholderNames.filter(
         name => !existingShareholderMap.has(name)
       );
@@ -158,24 +280,31 @@ export async function POST(req: NextRequest) {
           count: newShareholderNames.length 
         });
 
-        const shareholdersToInsert = newShareholderNames.map(name => ({
-          name,
-          shareholderNo: null as number | null,
-        }));
-
-        // Insert in chunks of 100
+        // Insert new shareholders in small chunks
         let insertedCount = 0;
-        for (let i = 0; i < shareholdersToInsert.length; i += 100) {
-          const chunk = shareholdersToInsert.slice(i, i + 100);
-          const inserted = await db
-            .insert(shareholders)
-            .values(chunk)
-            .returning();
+        for (let i = 0; i < newShareholderNames.length; i += CHUNK_SIZE) {
+          const chunk = newShareholderNames.slice(i, i + CHUNK_SIZE);
           
-          insertedCount += inserted.length;
+          const shareholdersToInsert = chunk.map(name => ({
+            name,
+            shareholderNo: null as number | null,
+            accountHolder: shareholderData.get(name)?.accountHolder || null,
+          }));
+
+          await db
+            .insert(shareholders)
+            .values(shareholdersToInsert);
+          
+          insertedCount += chunk.length;
+          
+          // Get the inserted shareholders by names to update the map
+          const insertedShareholders = await db
+            .select()
+            .from(shareholders)
+            .where(inArray(shareholders.name, chunk));
           
           // Update map
-          inserted.forEach(s => {
+          insertedShareholders.forEach(s => {
             existingShareholderMap.set(s.name, s);
           });
 
@@ -189,87 +318,100 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Prepare shareholdings data
-      await sendProgress({ 
-        type: 'preparing', 
-        message: 'Preparing shareholding records...' 
-      });
-
-      const shareholdingsToInsert: any[] = [];
+      // Process each date group separately
       const errors: string[] = [];
-      let errorCount = 0;
+      let totalProcessedCount = 0;
+      let totalErrorCount = 0;
 
-      for (let i = 0; i < data.length; i++) {
-        const row = data[i];
-        const name = row['Nama'];
-        
-        if (!name) {
-          errors.push(`Row ${i + 1}: Missing shareholder name`);
-          errorCount++;
-          continue;
-        }
-
-        const shareholder = existingShareholderMap.get(name);
-        if (!shareholder) {
-          errors.push(`Row ${i + 1}: Shareholder not found`);
-          errorCount++;
-          continue;
-        }
-
-        const sharesRaw = row['Jumlah Saham'] || '0';
-        const percentageRaw = row['%'] || '0';
-        const shares = parseInt(String(sharesRaw).replace(/,/g, '')) || 0;
-        const percentage = parseFloat(String(percentageRaw)) || 0;
-
-        shareholdingsToInsert.push({
-          shareholderId: shareholder.id,
-          sharesAmount: shares,
-          percentage,
-          date: dateString,
-        });
-      }
-
-      // Delete existing shareholdings for this date
-      if (shareholdingsToInsert.length > 0) {
+      for (const [currentDate, dateData] of dataByDate) {
         await sendProgress({ 
-          type: 'cleaning', 
-          message: 'Removing old data for this date...' 
+          type: 'preparing', 
+          message: `Processing ${dateData.length} records for date: ${currentDate}` 
         });
 
-        const shareholderIds = shareholdingsToInsert.map(s => s.shareholderId);
-        await db
-          .delete(shareholdings)
-          .where(
-            and(
-              inArray(shareholdings.shareholderId, shareholderIds),
-              eq(shareholdings.date, dateString)
-            )
-          );
-      }
+        const shareholdingsToInsert: any[] = [];
+        let errorCount = 0;
 
-      // Insert shareholdings in chunks
-      if (shareholdingsToInsert.length > 0) {
-        await sendProgress({ 
-          type: 'inserting_holdings', 
-          message: `Creating ${shareholdingsToInsert.length} shareholding records...`,
-          count: shareholdingsToInsert.length 
-        });
+        for (let i = 0; i < dateData.length; i++) {
+          const row = dateData[i];
+          const name = row['Nama'];
+          
+          if (!name) {
+            errors.push(`${currentDate} - Row ${i + 1}: Missing shareholder name`);
+            errorCount++;
+            continue;
+          }
 
-        let insertedCount = 0;
-        for (let i = 0; i < shareholdingsToInsert.length; i += 100) {
-          const chunk = shareholdingsToInsert.slice(i, i + 100);
-          await db.insert(shareholdings).values(chunk);
-          
-          insertedCount += chunk.length;
-          
-          await sendProgress({ 
-            type: 'progress_holdings', 
-            message: `Created ${insertedCount} of ${shareholdingsToInsert.length} shareholding records`,
-            current: insertedCount,
-            total: shareholdingsToInsert.length,
-            percentage: Math.round((insertedCount / shareholdingsToInsert.length) * 100)
+          const shareholder = existingShareholderMap.get(name);
+          if (!shareholder) {
+            errors.push(`${currentDate} - Row ${i + 1}: Shareholder not found`);
+            errorCount++;
+            continue;
+          }
+
+          const sharesRaw = row['Jumlah Saham'] || '0';
+          const percentageRaw = row['%'] || '0';
+          const shares = parseInt(String(sharesRaw).replace(/,/g, '')) || 0;
+          const percentage = parseFloat(String(percentageRaw)) || 0;
+
+          shareholdingsToInsert.push({
+            shareholderId: shareholder.id,
+            sharesAmount: shares,
+            percentage,
+            date: currentDate, // Use the specific date for this sheet
           });
         }
+
+        // Delete existing shareholdings for this specific date
+        if (shareholdingsToInsert.length > 0) {
+          await sendProgress({ 
+            type: 'cleaning', 
+            message: `Removing old data for date: ${currentDate}...` 
+          });
+
+          const shareholderIds = shareholdingsToInsert.map(s => s.shareholderId);
+          
+          // Delete in chunks to avoid query size limits
+          for (let i = 0; i < shareholderIds.length; i += CHUNK_SIZE) {
+            const chunk = shareholderIds.slice(i, i + CHUNK_SIZE);
+            await db
+              .delete(shareholdings)
+              .where(
+                and(
+                  inArray(shareholdings.shareholderId, chunk),
+                  eq(shareholdings.date, currentDate)
+                )
+              );
+          }
+        }
+
+        // Insert shareholdings for this date in smaller chunks
+        if (shareholdingsToInsert.length > 0) {
+          await sendProgress({ 
+            type: 'inserting_holdings', 
+            message: `Creating ${shareholdingsToInsert.length} records for date: ${currentDate}...`,
+            count: shareholdingsToInsert.length 
+          });
+
+          let insertedCount = 0;
+          for (let i = 0; i < shareholdingsToInsert.length; i += CHUNK_SIZE) {
+            const chunk = shareholdingsToInsert.slice(i, i + CHUNK_SIZE);
+            await db.insert(shareholdings).values(chunk);
+            
+            insertedCount += chunk.length;
+            
+            await sendProgress({ 
+              type: 'progress_holdings', 
+              message: `Created ${insertedCount} of ${shareholdingsToInsert.length} records for ${currentDate}`,
+              current: insertedCount,
+              total: shareholdingsToInsert.length,
+              percentage: Math.round((insertedCount / shareholdingsToInsert.length) * 100)
+            });
+          }
+        }
+
+        totalProcessedCount += shareholdingsToInsert.length;
+        totalErrorCount += errorCount;
       }
 
       // Update upload status
@@ -278,7 +420,7 @@ export async function POST(req: NextRequest) {
       await db
         .update(uploads)
         .set({
-          status: errorCount > 0 ? 'completed_with_errors' : 'completed',
+          status: totalErrorCount > 0 ? 'completed_with_errors' : 'completed',
         })
         .where(eq(uploads.id, uploadRecord.id));
 
@@ -291,19 +433,20 @@ export async function POST(req: NextRequest) {
         details: JSON.stringify({
           fileName: file.name,
           recordCount: data.length,
-          processedCount: shareholdingsToInsert.length,
-          errorCount,
-          uploadDate: dateString,
+          processedCount: totalProcessedCount,
+          errorCount: totalErrorCount,
+          uniqueDates: uniqueDates,
+          sheetsProcessed: dataByDate.size,
         }),
       });
 
       // Send completion
       await sendProgress({ 
         type: 'complete', 
-        message: `Successfully processed ${shareholdingsToInsert.length} records`,
+        message: `Successfully processed ${totalProcessedCount} records across ${uniqueDates.length} dates`,
         uploadId: uploadRecord.id,
-        processedCount: shareholdingsToInsert.length,
-        errorCount,
+        processedCount: totalProcessedCount,
+        errorCount: totalErrorCount,
         errors: errors.slice(0, 10)
       });
 

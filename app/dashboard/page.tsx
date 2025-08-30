@@ -21,6 +21,18 @@ import {
     ResponsiveContainer,
 } from 'recharts';
 
+// Helper function to format large numbers
+const formatNumber = (value: number) => {
+  if (value >= 1000000000) {
+    return (value / 1000000000).toFixed(1) + 'B';
+  } else if (value >= 1000000) {
+    return (value / 1000000).toFixed(1) + 'M';
+  } else if (value >= 1000) {
+    return (value / 1000).toFixed(0) + 'K';
+  }
+  return value.toString();
+};
+
 interface DashboardStats {
     totalShareholders: number;
     activeShareholders: number;
@@ -127,7 +139,7 @@ export default function DashboardPage() {
                     </CardHeader>
                     <CardContent>
                         <div className="text-2xl font-bold">
-                            {stats?.activeShareholders.toLocaleString() || 0}
+                            {stats?.activeShareholders ? Number(stats.activeShareholders).toLocaleString() : '0'}
                         </div>
                         {stats?.changes && stats.changes.shareholdersChange !== 0 && (
                             <p className="text-xs flex items-center gap-1">
@@ -154,7 +166,7 @@ export default function DashboardPage() {
                     </CardHeader>
                     <CardContent>
                         <div className="text-2xl font-bold">
-                            {stats?.totalShares.toLocaleString() || 0}
+                            {stats?.totalShares ? Number(stats.totalShares).toLocaleString() : '0'}
                         </div>
                         {stats?.changes && stats.changes.sharesChange !== 0 && (
                             <p className="text-xs flex items-center gap-1">
@@ -224,7 +236,7 @@ export default function DashboardPage() {
                                             dataKey="date"
                                             tickFormatter={(value) => new Date(value).toLocaleDateString()}
                                         />
-                                        <YAxis />
+                                        <YAxis tickFormatter={formatNumber} />
                                         <Tooltip
                                             labelFormatter={(value) => new Date(value).toLocaleDateString()}
                                             formatter={(value: any) => value.toLocaleString()}
@@ -265,7 +277,7 @@ export default function DashboardPage() {
                                             height={100}
                                             tick={{ fontSize: 10 }}
                                         />
-                                        <YAxis />
+                                        <YAxis tickFormatter={formatNumber} />
                                         <Tooltip formatter={(value: any) => value.toLocaleString()} />
                                         <Bar dataKey="shares" fill="#10b981" name="Shares" />
                                     </BarChart>

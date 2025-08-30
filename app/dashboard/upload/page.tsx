@@ -13,7 +13,6 @@ import { toast } from 'sonner';
 
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
-  const [uploadDate, setUploadDate] = useState(new Date().toISOString().split('T')[0]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadResult, setUploadResult] = useState<any>(null);
@@ -45,8 +44,8 @@ export default function UploadPage() {
   });
 
   const handleUpload = async () => {
-    if (!file || !uploadDate) {
-      toast.error('Please select a file and date');
+    if (!file) {
+      toast.error('Please select a file');
       return;
     }
 
@@ -57,7 +56,7 @@ export default function UploadPage() {
 
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('date', uploadDate);
+    // Date will be extracted from Excel file automatically
 
     try {
       // Use streaming endpoint for real-time progress
@@ -157,6 +156,9 @@ export default function UploadPage() {
                     setUploadProgress(0);
                   }, 2000);
                   break;
+                case 'info':
+                  setProgressMessage(data.message);
+                  break;
                 case 'error':
                   setProgressMessage(`Error: ${data.message}`);
                   toast.error(data.message);
@@ -202,16 +204,6 @@ export default function UploadPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="date">Data Date</Label>
-              <Input
-                id="date"
-                type="date"
-                value={uploadDate}
-                onChange={(e) => setUploadDate(e.target.value)}
-                disabled={isUploading}
-              />
-            </div>
 
             <div
               {...getRootProps()}
@@ -270,7 +262,7 @@ export default function UploadPage() {
 
             <Button
               onClick={handleUpload}
-              disabled={!file || !uploadDate || isUploading}
+              disabled={!file || isUploading}
               className="w-full"
             >
               {isUploading ? 'Processing...' : 'Upload File'}
@@ -290,8 +282,9 @@ export default function UploadPage() {
               <h4 className="font-medium">Required Columns:</h4>
               <ul className="space-y-1 text-sm text-gray-600">
                 <li>• Nama / Name - Shareholder name</li>
-                <li>• Jumlah_Saham / Shares - Number of shares</li>
-                <li>• Percentage - Ownership percentage</li>
+                <li>• Jumlah Saham / Shares - Number of shares</li>
+                <li>• % / Percentage - Ownership percentage</li>
+                <li>• Nama Pemegang Rekening - Account holder (optional)</li>
               </ul>
             </div>
 
@@ -300,7 +293,9 @@ export default function UploadPage() {
               <ul className="space-y-1 text-sm text-gray-600">
                 <li>• Maximum file size: 10MB</li>
                 <li>• Supported formats: .xlsx, .xls, .csv</li>
-                <li>• First row should contain column headers</li>
+                <li>• Multiple sheets supported in Excel files</li>
+                <li>• Date will be auto-extracted from row 3</li>
+                <li>• Header row should contain column names</li>
               </ul>
             </div>
 

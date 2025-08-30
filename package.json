@@ -10,11 +10,16 @@
     "build:prod": "NODE_ENV=production next build",
     "vercel-build": "next build",
     "postinstall": "node -e \"console.log('Dependencies installed successfully')\"",
-    "seed": "tsx scripts/seed-demo-data.ts"
+    "seed": "tsx scripts/seed-demo-data.ts",
+    "db:reset": "tsx scripts/reset-database.ts",
+    "analyze-excel": "tsx scripts/analyze-excel.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.1",
-    "@libsql/client": "^0.15.12",
     "@radix-ui/react-avatar": "^1.1.10",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
@@ -34,6 +39,7 @@
     "drizzle-orm": "^0.44.4",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.540.0",
+    "mysql2": "^3.14.3",
     "next": "15.4.7",
     "next-auth": "^4.24.11",
     "next-themes": "^0.4.6",

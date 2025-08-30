@@ -1,51 +1,53 @@
-import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
+import { mysqlTable, varchar, int, decimal, datetime, boolean, text } from 'drizzle-orm/mysql-core';
 import { sql } from 'drizzle-orm';
 
-export const users = sqliteTable('users', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  email: text('email').notNull().unique(),
-  password: text('password').notNull(),
-  name: text('name').notNull(),
-  isAdmin: integer('is_admin', { mode: 'boolean' }).default(false),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+export const users = mysqlTable('users', {
+  id: int('id').primaryKey().autoincrement(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  password: varchar('password', { length: 255 }).notNull(),
+  name: varchar('name', { length: 255 }).notNull(),
+  isAdmin: boolean('is_admin').default(false),
+  createdAt: datetime('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: datetime('updated_at').default(sql`CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`),
 });
 
-export const shareholders = sqliteTable('shareholders', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  shareholderNo: integer('shareholder_no'),
-  name: text('name').notNull(),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+export const shareholders = mysqlTable('shareholders', {
+  id: int('id').primaryKey().autoincrement(),
+  shareholderNo: int('shareholder_no'),
+  name: varchar('name', { length: 255 }).notNull(),
+  accountHolder: varchar('account_holder', { length: 255 }),
+  sheetName: varchar('sheet_name', { length: 100 }),
+  createdAt: datetime('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: datetime('updated_at').default(sql`CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`),
 });
 
-export const shareholdings = sqliteTable('shareholdings', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  shareholderId: integer('shareholder_id').references(() => shareholders.id),
-  date: text('date').notNull(), // Store as ISO string
-  sharesAmount: integer('shares_amount').notNull(),
-  percentage: real('percentage').notNull(),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+export const shareholdings = mysqlTable('shareholdings', {
+  id: int('id').primaryKey().autoincrement(),
+  shareholderId: int('shareholder_id').references(() => shareholders.id),
+  date: varchar('date', { length: 10 }).notNull(), // Store as ISO string YYYY-MM-DD
+  sharesAmount: int('shares_amount').notNull(),
+  percentage: decimal('percentage', { precision: 10, scale: 6 }).notNull(),
+  createdAt: datetime('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const uploads = sqliteTable('uploads', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  filename: text('filename').notNull(),
-  uploadDate: text('upload_date').notNull(),
-  recordsCount: integer('records_count'),
-  status: text('status'),
-  uploadedBy: integer('uploaded_by').references(() => users.id),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+export const uploads = mysqlTable('uploads', {
+  id: int('id').primaryKey().autoincrement(),
+  filename: varchar('filename', { length: 255 }).notNull(),
+  uploadDate: varchar('upload_date', { length: 10 }).notNull(),
+  recordsCount: int('records_count'),
+  status: varchar('status', { length: 50 }),
+  uploadedBy: int('uploaded_by').references(() => users.id),
+  createdAt: datetime('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const auditLogs = sqliteTable('audit_logs', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  userId: integer('user_id').references(() => users.id),
-  action: text('action').notNull(),
-  entity: text('entity'),
-  entityId: integer('entity_id'),
-  metadata: text('metadata'), // JSON string
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+export const auditLogs = mysqlTable('audit_logs', {
+  id: int('id').primaryKey().autoincrement(),
+  userId: int('user_id').references(() => users.id),
+  action: varchar('action', { length: 100 }).notNull(),
+  entityType: varchar('entity_type', { length: 50 }),
+  entityId: int('entity_id'),
+  details: text('details'), // JSON string
+  createdAt: datetime('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
 // Type exports

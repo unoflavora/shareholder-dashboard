@@ -14,35 +14,49 @@ export const authOptions: NextAuthOptions = {
         password: { label: 'Password', type: 'password' }
       },
       async authorize(credentials) {
+        console.log('Auth attempt:', credentials?.email);
+        
         if (!credentials?.email || !credentials?.password) {
+          console.log('Missing credentials');
           return null;
         }
 
-        const user = await db
-          .select()
-          .from(users)
-          .where(eq(users.email, credentials.email))
-          .limit(1);
+        try {
+          const user = await db
+            .select()
+            .from(users)
+            .where(eq(users.email, credentials.email))
+            .limit(1);
 
-        if (!user.length) {
+          console.log('User query result:', user.length > 0 ? 'Found' : 'Not found');
+
+          if (!user.length) {
+            console.log('User not found for email:', credentials.email);
+            return null;
+          }
+
+          const isPasswordValid = await bcrypt.compare(
+            credentials.password,
+            user[0].password
+          );
+
+          console.log('Password validation:', isPasswordValid ? 'Valid' : 'Invalid');
+
+          if (!isPasswordValid) {
+            return null;
+          }
+
+          console.log('Auth success for:', user[0].email);
+          return {
+            id: user[0].id.toString(),
+            email: user[0].email,
+            name: user[0].name,
+            isAdmin: user[0].isAdmin
+          };
+        } catch (error) {
+          console.error('Auth error:', error);
           return null;
         }
-
-        const isPasswordValid = await bcrypt.compare(
-          credentials.password,
-          user[0].password
-        );
-
-        if (!isPasswordValid) {
-          return null;
-        }
-
-        return {
-          id: user[0].id.toString(),
-          email: user[0].email,
-          name: user[0].name,
-          isAdmin: user[0].isAdmin
-        };
       }
     })
   ],

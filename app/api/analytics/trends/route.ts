@@ -40,6 +40,7 @@ export async function GET(req: NextRequest) {
       topShareholders = await db
         .select({
           name: shareholders.name,
+          accountHolder: shareholders.accountHolder,
           shares: shareholdings.sharesAmount,
           percentage: shareholdings.percentage,
         })
@@ -116,8 +117,9 @@ export async function GET(req: NextRequest) {
       })),
       topShareholders: topShareholders.map(s => ({
         name: s.name,
+        accountHolder: s.accountHolder,
         shares: s.shares,
-        percentage: s.percentage,
+        percentage: parseFloat(s.percentage as string) || 0,
       })),
       distribution: distribution.map(d => ({
         range: d.range,

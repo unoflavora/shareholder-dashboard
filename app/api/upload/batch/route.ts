@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db/client';
 import { shareholders, shareholdings, uploads, auditLogs } from '@/lib/db/schema';
-import { eq, inArray, and } from 'drizzle-orm';
+import { eq, inArray, and, desc } from 'drizzle-orm';
 import * as XLSX from 'xlsx';
 
 export async function POST(req: NextRequest) {
@@ -99,13 +99,20 @@ export async function POST(req: NextRequest) {
     const dateString = new Date(uploadDate).toISOString().split('T')[0];
     
     // Create upload record
-    const [uploadRecord] = await db.insert(uploads).values({
+    await db.insert(uploads).values({
       filename: file.name,
       uploadDate: dateString,
       recordsCount: data.length,
       uploadedBy: parseInt(session.user.id),
       status: 'processing',
-    }).returning();
+    });
+    
+    // Get the uploaded record
+    const [uploadRecord] = await db
+      .select()
+      .from(uploads)
+      .orderBy(desc(uploads.id))
+      .limit(1);
 
     // Prepare data for batch processing
     const shareholderNames = [...new Set(data.map(row => row['Nama']))].filter(Boolean);
@@ -136,10 +143,16 @@ export async function POST(req: NextRequest) {
       // Insert in chunks of 100 to avoid query size limits
       for (let i = 0; i < shareholdersToInsert.length; i += 100) {
         const chunk = shareholdersToInsert.slice(i, i + 100);
-        const inserted = await db
+        await db
           .insert(shareholders)
-          .values(chunk)
-          .returning();
+          .values(chunk);
+        
+        // Get the inserted shareholders by names
+        const chunkNames = chunk.map(s => s.name);
+        const inserted = await db
+          .select()
+          .from(shareholders)
+          .where(inArray(shareholders.name, chunkNames));
         insertedShareholders.push(...inserted);
       }
       

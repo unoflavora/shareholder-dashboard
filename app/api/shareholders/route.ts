@@ -31,6 +31,7 @@ export async function GET(req: NextRequest) {
       .select({
         id: shareholders.id,
         name: shareholders.name,
+        accountHolder: shareholders.accountHolder,
         shares: shareholdings.sharesAmount,
         percentage: shareholdings.percentage,
         date: shareholdings.date,
@@ -42,7 +43,7 @@ export async function GET(req: NextRequest) {
         shareholdings,
         and(
           eq(shareholdings.shareholderId, shareholders.id),
-          date ? eq(shareholdings.date, new Date(date)) : sql`1=1`
+          date ? eq(shareholdings.date, date) : sql`1=1`
         )
       );
 
@@ -79,8 +80,14 @@ export async function GET(req: NextRequest) {
 
     const results = await query;
 
+    // Convert percentage strings to numbers for frontend compatibility
+    const processedResults = results.map(shareholder => ({
+      ...shareholder,
+      percentage: shareholder.percentage ? parseFloat(shareholder.percentage as string) : null,
+    }));
+
     return NextResponse.json({
-      shareholders: results,
+      shareholders: processedResults,
       pagination: {
         page,
         limit,
@@ -128,22 +135,17 @@ export async function POST(req: NextRequest) {
 
     // If not exists, create new shareholder
     if (!shareholder) {
-      [shareholder] = await db
+      await db
         .insert(shareholders)
         .values({
           name,
-          firstSeenDate: shareholderDate,
-          lastSeenDate: shareholderDate,
-        })
-        .returning();
-    } else {
-      // Update last seen date if necessary
-      if (shareholderDate > shareholder.lastSeenDate) {
-        await db
-          .update(shareholders)
-          .set({ lastSeenDate: shareholderDate })
-          .where(eq(shareholders.id, shareholder.id));
-      }
+        });
+      // Get the newly created shareholder
+      [shareholder] = await db
+        .select()
+        .from(shareholders)
+        .where(eq(shareholders.name, name))
+        .limit(1);
     }
 
     // Create or update shareholding
@@ -153,7 +155,7 @@ export async function POST(req: NextRequest) {
       .where(
         and(
           eq(shareholdings.shareholderId, shareholder.id),
-          eq(shareholdings.date, shareholderDate)
+          eq(shareholdings.date, date)
         )
       )
       .limit(1);
@@ -163,7 +165,7 @@ export async function POST(req: NextRequest) {
       await db
         .update(shareholdings)
         .set({
-          shares: shares || 0,
+          sharesAmount: shares || 0,
           percentage: percentage || 0,
         })
         .where(eq(shareholdings.id, existingHolding[0].id));
@@ -173,9 +175,9 @@ export async function POST(req: NextRequest) {
         .insert(shareholdings)
         .values({
           shareholderId: shareholder.id,
-          shares: shares || 0,
+          sharesAmount: shares || 0,
           percentage: percentage || 0,
-          date: shareholderDate,
+          date: date,
         });
     }
 

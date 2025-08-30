@@ -28,6 +28,18 @@ import { Loader2, TrendingUp, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { Pagination } from '@/components/ui/pagination';
 
+// Helper function to format large numbers
+const formatNumber = (value: number) => {
+  if (value >= 1000000000) {
+    return (value / 1000000000).toFixed(1) + 'B';
+  } else if (value >= 1000000) {
+    return (value / 1000000).toFixed(1) + 'M';
+  } else if (value >= 1000) {
+    return (value / 1000).toFixed(0) + 'K';
+  }
+  return value.toString();
+};
+
 interface BuyingActivity {
     date: string;
     increase: number;
@@ -233,8 +245,8 @@ export default function ActiveBuyersAnalysis({ startDate, endDate, periodType }:
                                     periodType === 'monthly' ? value : new Date(value).toLocaleDateString()
                                 }
                             />
-                            <YAxis yAxisId="left" />
-                            <YAxis yAxisId="right" orientation="right" />
+                            <YAxis yAxisId="left" tickFormatter={formatNumber} />
+                            <YAxis yAxisId="right" orientation="right" tickFormatter={formatNumber} />
                             <Tooltip
                                 labelFormatter={(value) =>
                                     periodType === 'monthly' ? value : new Date(value).toLocaleDateString()

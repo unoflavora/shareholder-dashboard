@@ -26,6 +26,18 @@ import {
 import { Loader2, Target, Users2, Download, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
 
+// Helper function to format large numbers
+const formatNumber = (value: number) => {
+  if (value >= 1000000000) {
+    return (value / 1000000000).toFixed(1) + 'B';
+  } else if (value >= 1000000) {
+    return (value / 1000000).toFixed(1) + 'M';
+  } else if (value >= 1000) {
+    return (value / 1000).toFixed(0) + 'K';
+  }
+  return value.toString();
+};
+
 interface TimingAnalysisProps {
   startDate: string;
   endDate: string;
@@ -200,8 +212,8 @@ export default function TimingAnalysis({ startDate, endDate }: TimingAnalysisPro
                 dataKey="date" 
                 tickFormatter={(value) => new Date(value).toLocaleDateString()}
               />
-              <YAxis yAxisId="left" />
-              <YAxis yAxisId="right" orientation="right" />
+              <YAxis yAxisId="left" tickFormatter={formatNumber} />
+              <YAxis yAxisId="right" orientation="right" tickFormatter={formatNumber} />
               <Tooltip 
                 labelFormatter={(value) => new Date(value).toLocaleDateString()}
                 formatter={(value: any) => value.toLocaleString()}

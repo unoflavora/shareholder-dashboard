@@ -6,6 +6,14 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import {
   Table,
   TableBody,
   TableCell,
@@ -24,6 +32,8 @@ interface BehaviorPatternsProps {
 export default function BehaviorPatterns({ startDate, endDate }: BehaviorPatternsProps) {
   const [data, setData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedActivity, setSelectedActivity] = useState<any>(null);
+  const [showParticipantsDialog, setShowParticipantsDialog] = useState(false);
 
   const fetchData = async () => {
     if (!startDate || !endDate) return;
@@ -277,7 +287,17 @@ export default function BehaviorPatterns({ startDate, endDate }: BehaviorPattern
                     <TableCell>{activity.count} shareholders</TableCell>
                     <TableCell className="max-w-xs truncate">
                       {activity.participants.slice(0, 3).map((p: any) => p.name).join(', ')}
-                      {activity.participants.length > 3 && ` +${activity.participants.length - 3} more`}
+                      {activity.participants.length > 3 && (
+                        <span
+                          className="text-blue-600 cursor-pointer hover:text-blue-800 hover:underline ml-1"
+                          onClick={() => {
+                            setSelectedActivity(activity);
+                            setShowParticipantsDialog(true);
+                          }}
+                        >
+                          +{activity.participants.length - 3} more...
+                        </span>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -286,6 +306,63 @@ export default function BehaviorPatterns({ startDate, endDate }: BehaviorPattern
           </div>
         </CardContent>
       </Card>
+
+      {/* Participants Dialog */}
+      <Dialog open={showParticipantsDialog} onOpenChange={setShowParticipantsDialog}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Coordinated Activity Participants
+            </DialogTitle>
+            <DialogDescription>
+              {selectedActivity && (
+                <>
+                  Activity on {new Date(selectedActivity.date).toLocaleDateString()} - 
+                  <Badge className={
+                    selectedActivity.type === 'coordinated_buying' 
+                      ? 'bg-green-100 text-green-800 ml-2' 
+                      : 'bg-red-100 text-red-800 ml-2'
+                  }>
+                    {selectedActivity.type.replace('_', ' ').toUpperCase()}
+                  </Badge>
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedActivity && (
+            <div className="mt-4">
+              <div className="text-sm text-gray-600 mb-4">
+                Total participants: {selectedActivity.participants.length} shareholders
+              </div>
+              <div className="grid gap-2">
+                {selectedActivity.participants.map((participant: any, index: number) => (
+                  <div 
+                    key={index} 
+                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border"
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-medium">{participant.name}</span>
+                      {participant.accountHolder && (
+                        <span className="text-sm text-gray-600">
+                          Account: {participant.accountHolder}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-medium">
+                        {participant.sharesAmount ? participant.sharesAmount.toLocaleString() : '0'} shares
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        {participant.percentage ? parseFloat(participant.percentage.toString()).toFixed(2) : '0.00'}% ownership
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

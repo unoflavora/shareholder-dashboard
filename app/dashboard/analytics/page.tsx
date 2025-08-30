@@ -24,6 +24,18 @@ import {
 } from 'recharts';
 import { toast } from 'sonner';
 
+// Helper function to format large numbers
+const formatNumber = (value: number) => {
+  if (value >= 1000000000) {
+    return (value / 1000000000).toFixed(1) + 'B';
+  } else if (value >= 1000000) {
+    return (value / 1000000).toFixed(1) + 'M';
+  } else if (value >= 1000) {
+    return (value / 1000).toFixed(0) + 'K';
+  }
+  return value.toString();
+};
+
 // Import new analytics components
 import ActiveBuyersAnalysis from '@/app/components/analytics/ActiveBuyersAnalysis';
 import ActiveSellersAnalysis from '@/app/components/analytics/ActiveSellersAnalysis';
@@ -40,6 +52,7 @@ interface AnalyticsData {
   }>;
   topShareholders: Array<{
     name: string;
+    accountHolder: string | null;
     shares: number;
     percentage: number;
   }>;
@@ -220,8 +233,8 @@ function AnalyticsContent() {
                     dataKey="date"
                     tickFormatter={(value) => new Date(value).toLocaleDateString()}
                   />
-                  <YAxis yAxisId="left" />
-                  <YAxis yAxisId="right" orientation="right" />
+                  <YAxis yAxisId="left" tickFormatter={formatNumber} />
+                  <YAxis yAxisId="right" orientation="right" tickFormatter={formatNumber} />
                   <Tooltip
                     labelFormatter={(value) => new Date(value).toLocaleDateString()}
                     formatter={(value: any) => value.toLocaleString()}
@@ -263,7 +276,7 @@ function AnalyticsContent() {
                     dataKey="date"
                     tickFormatter={(value) => new Date(value).toLocaleDateString()}
                   />
-                  <YAxis />
+                  <YAxis tickFormatter={formatNumber} />
                   <Tooltip
                     labelFormatter={(value) => new Date(value).toLocaleDateString()}
                     formatter={(value: any) => value.toLocaleString()}
@@ -343,7 +356,7 @@ function AnalyticsContent() {
                     interval={0}
                     tick={{ fontSize: 10 }}
                   />
-                  <YAxis formatter={(value) => value.toLocaleString()} />
+                  <YAxis tickFormatter={formatNumber} />
                   <Tooltip formatter={(value: any) => value.toLocaleString()} />
                   <Legend />
                   <Bar dataKey="shares" fill="#3b82f6" name="Shares" />
@@ -366,6 +379,7 @@ function AnalyticsContent() {
                     <tr>
                       <th scope="col" className="px-6 py-3">Rank</th>
                       <th scope="col" className="px-6 py-3">Name</th>
+                      <th scope="col" className="px-6 py-3">Account Holder</th>
                       <th scope="col" className="px-6 py-3">Shares</th>
                       <th scope="col" className="px-6 py-3">Ownership %</th>
                     </tr>
@@ -375,6 +389,7 @@ function AnalyticsContent() {
                       <tr key={index} className="bg-white border-b">
                         <td className="px-6 py-4 font-medium">#{index + 1}</td>
                         <td className="px-6 py-4">{shareholder.name}</td>
+                        <td className="px-6 py-4 text-gray-600">{shareholder.accountHolder || '-'}</td>
                         <td className="px-6 py-4">{shareholder.shares.toLocaleString()}</td>
                         <td className="px-6 py-4">{shareholder.percentage.toFixed(2)}%</td>
                       </tr>

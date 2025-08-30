@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
       .select({
         shareholderId: shareholdings.shareholderId,
         shareholderName: shareholders.name,
+        accountHolder: shareholders.accountHolder,
         date: shareholdings.date,
         shares: shareholdings.sharesAmount,
         percentage: shareholdings.percentage,
@@ -46,6 +47,7 @@ export async function GET(request: NextRequest) {
         shareholderProfiles.set(record.shareholderId, {
           id: record.shareholderId,
           name: record.shareholderName,
+          accountHolder: record.accountHolder,
           activities: []
         });
       }
@@ -182,14 +184,34 @@ export async function GET(request: NextRequest) {
         if (!dateActivityMap.has(date)) {
           dateActivityMap.set(date, { buyers: [], sellers: [] });
         }
-        dateActivityMap.get(date).buyers.push({ id: shareholderId, name: pattern.name });
+        const shareholderProfile = shareholderProfiles.get(shareholderId);
+        const activityOnDate = shareholderProfile.activities.find(a => a.date === date);
+        if (activityOnDate) {
+          dateActivityMap.get(date).buyers.push({ 
+            id: shareholderId, 
+            name: pattern.name,
+            accountHolder: shareholderProfile.accountHolder,
+            sharesAmount: activityOnDate.shares,
+            percentage: activityOnDate.percentage
+          });
+        }
       });
       
       pattern.sellingDates.forEach(date => {
         if (!dateActivityMap.has(date)) {
           dateActivityMap.set(date, { buyers: [], sellers: [] });
         }
-        dateActivityMap.get(date).sellers.push({ id: shareholderId, name: pattern.name });
+        const shareholderProfile = shareholderProfiles.get(shareholderId);
+        const activityOnDate = shareholderProfile.activities.find(a => a.date === date);
+        if (activityOnDate) {
+          dateActivityMap.get(date).sellers.push({ 
+            id: shareholderId, 
+            name: pattern.name,
+            accountHolder: shareholderProfile.accountHolder,
+            sharesAmount: activityOnDate.shares,
+            percentage: activityOnDate.percentage
+          });
+        }
       });
     }
     

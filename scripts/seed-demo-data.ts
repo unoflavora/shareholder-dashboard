@@ -1,32 +1,38 @@
 import * as dotenv from 'dotenv';
 import * as path from 'path';
-import { createClient } from '@libsql/client';
-import { drizzle } from 'drizzle-orm/libsql';
-import { sql } from 'drizzle-orm';
+import mysql from 'mysql2/promise';
+import { drizzle } from 'drizzle-orm/mysql2';
+import { sql, eq } from 'drizzle-orm';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
-import { shareholders, shareholdings } from '../lib/db/schema';
+import { shareholders, shareholdings, users } from '../lib/db/schema';
 
-if (!process.env.TURSO_DATABASE_URL || !process.env.TURSO_AUTH_TOKEN) {
-  console.error('❌ Database credentials not found');
+if (!process.env.DATABASE_URL) {
+  console.error('❌ DATABASE_URL not found');
   process.exit(1);
 }
 
-const client = createClient({
-  url: process.env.TURSO_DATABASE_URL,
-  authToken: process.env.TURSO_AUTH_TOKEN,
-});
-
-const db = drizzle(client);
-
 async function seedDemoData() {
   console.log('🌱 Starting data seeding...');
+
+  const connection = await mysql.createConnection(process.env.DATABASE_URL);
+  const db = drizzle(connection, { mode: 'default' });
 
   try {
     console.log('Clearing existing data...');
     await db.delete(shareholdings);
     await db.delete(shareholders);
+    await db.delete(users);
+
+    // Create a demo user first
+    console.log('Creating demo user...');
+    await db.insert(users).values({
+      email: 'admin@example.com',
+      password: '$2b$10$wCa29mSZpwW4dmpRu1AzpexiTVDuNR8gh49kTDjBB1HVaQbaL4ZiK', // example123
+      name: 'Demo Admin',
+      isAdmin: true,
+    });
 
     const profiles = [
       // Buyers (will increase positions in last 30 days)
@@ -57,13 +63,14 @@ async function seedDemoData() {
 
     console.log('Creating shareholders...');
     const created = [];
-    for (const p of profiles) {
-      const [s] = await db.insert(shareholders).values({
+    for (let i = 0; i < profiles.length; i++) {
+      const p = profiles[i];
+      await db.insert(shareholders).values({
         name: p.name,
-        shareholderNo: Math.floor(Math.random() * 1000000).toString(),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }).returning();
+        shareholderNo: Math.floor(Math.random() * 1000000),
+      });
+      // Get the inserted shareholder by name (since we just inserted it)
+      const [s] = await db.select().from(shareholders).where(eq(shareholders.name, p.name)).limit(1);
       created.push({ ...s, ...p });
     }
 
@@ -124,8 +131,7 @@ async function seedDemoData() {
             shareholderId: sh.id,
             date: date,
             sharesAmount: shares,
-            percentage: (shares / totalShares) * 100,
-            createdAt: new Date(),
+            percentage: parseFloat(((shares / totalShares) * 100).toFixed(6)),
           });
         }
       }
@@ -141,8 +147,11 @@ async function seedDemoData() {
     console.log(`- Date range: ${dates[0]} to ${dates[dates.length-1]}`);
     console.log(`- Last 30 days from: ${thirtyDaysAgoStr}`);
     
+    await connection.end();
+    
   } catch (error) {
     console.error('❌ Error:', error);
+    await connection.end();
     process.exit(1);
   }
   

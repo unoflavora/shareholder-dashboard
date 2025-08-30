@@ -27,6 +27,7 @@ import { toast } from 'sonner';
 interface Shareholder {
   id: number;
   name: string;
+  accountHolder: string | null;
   shares: number | null;
   percentage: number | null;
   date: string | null;
@@ -253,6 +254,7 @@ export default function ShareholdersPage() {
                       <ArrowUpDown className="ml-2 h-4 w-4" />
                     </Button>
                   </TableHead>
+                  <TableHead>Account Holder</TableHead>
                   <TableHead>
                     <Button
                       variant="ghost"
@@ -281,13 +283,13 @@ export default function ShareholdersPage() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8">
+                    <TableCell colSpan={7} className="text-center py-8">
                       Loading...
                     </TableCell>
                   </TableRow>
                 ) : shareholders.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                    <TableCell colSpan={7} className="text-center py-8 text-gray-500">
                       No shareholders found
                     </TableCell>
                   </TableRow>
@@ -295,6 +297,9 @@ export default function ShareholdersPage() {
                   shareholders.map((shareholder) => (
                     <TableRow key={shareholder.id}>
                       <TableCell className="font-medium">{shareholder.name}</TableCell>
+                      <TableCell className="text-gray-600">
+                        {shareholder.accountHolder || '-'}
+                      </TableCell>
                       <TableCell>
                         {shareholder.shares?.toLocaleString() || '-'}
                       </TableCell>
