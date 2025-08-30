@@ -52,27 +52,38 @@ export async function GET(req: NextRequest) {
       query = query.where(like(shareholders.name, `%${search}%`));
     }
 
-    // Get total count
-    const countResult = await db
+    // Get total count - count based on the actual query structure
+    let countQuery = db
       .select({ count: sql<number>`count(*)` })
       .from(shareholders)
-      .where(search ? like(shareholders.name, `%${search}%`) : sql`1=1`);
+      .leftJoin(
+        shareholdings,
+        and(
+          eq(shareholdings.shareholderId, shareholders.id),
+          date ? eq(shareholdings.date, date) : sql`1=1`
+        )
+      );
     
+    if (search) {
+      countQuery = countQuery.where(like(shareholders.name, `%${search}%`));
+    }
+    
+    const countResult = await countQuery;
     const totalCount = countResult[0].count;
 
-    // Apply sorting
+    // Apply sorting with stable secondary sort
     if (sortBy === 'name') {
       query = sortOrder === 'asc' 
-        ? query.orderBy(asc(shareholders.name))
-        : query.orderBy(desc(shareholders.name));
+        ? query.orderBy(asc(shareholders.name), desc(shareholdings.date), asc(shareholders.id))
+        : query.orderBy(desc(shareholders.name), desc(shareholdings.date), asc(shareholders.id));
     } else if (sortBy === 'shares') {
       query = sortOrder === 'asc'
-        ? query.orderBy(asc(shareholdings.sharesAmount))
-        : query.orderBy(desc(shareholdings.sharesAmount));
+        ? query.orderBy(asc(shareholdings.sharesAmount), asc(shareholders.name), desc(shareholdings.date), asc(shareholders.id))
+        : query.orderBy(desc(shareholdings.sharesAmount), asc(shareholders.name), desc(shareholdings.date), asc(shareholders.id));
     } else if (sortBy === 'percentage') {
       query = sortOrder === 'asc'
-        ? query.orderBy(asc(shareholdings.percentage))
-        : query.orderBy(desc(shareholdings.percentage));
+        ? query.orderBy(asc(shareholdings.percentage), asc(shareholders.name), desc(shareholdings.date), asc(shareholders.id))
+        : query.orderBy(desc(shareholdings.percentage), asc(shareholders.name), desc(shareholdings.date), asc(shareholders.id));
     }
 
     // Apply pagination

@@ -294,8 +294,8 @@ export default function ShareholdersPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  shareholders.map((shareholder) => (
-                    <TableRow key={shareholder.id}>
+                  shareholders.map((shareholder, index) => (
+                    <TableRow key={`${shareholder.id}-${shareholder.date || index}`}>
                       <TableCell className="font-medium">{shareholder.name}</TableCell>
                       <TableCell className="text-gray-600">
                         {shareholder.accountHolder || '-'}
