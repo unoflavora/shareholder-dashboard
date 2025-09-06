@@ -188,95 +188,143 @@ export async function GET(request: NextRequest) {
     // Sort by total decrease (most active sellers first)
     activeSellers.sort((a, b) => b.totalDecrease - a.totalDecrease);
 
-    // Apply seller date filter if provided
+    // Apply seller date filter if provided, otherwise use same logic as summary
     let filteredSellers = activeSellers;
+    if (!sellerDateFilter) {
+      // Use same logic as summary to get all sellers in the period
+      const allSellersQuery = `
+        WITH period_sellers AS (
+          SELECT 
+            shareholder_id,
+            s3.name as shareholder_name,
+            SUM(
+              (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at ASC, s2.id ASC LIMIT 1) -
+              (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1)
+            ) as total_decrease,
+            MIN(
+              (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at ASC, s2.id ASC LIMIT 1)
+            ) as first_shares,
+            MIN(
+              (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1)
+            ) as final_shares,
+            MIN(date) as first_date,
+            MAX(date) as last_date
+          FROM shareholdings s1
+          JOIN shareholders s3 ON s1.shareholder_id = s3.id
+          WHERE date >= '${startDate}' AND date <= '${endDate}'
+          AND (
+            SELECT COUNT(*) FROM shareholdings s4 
+            WHERE s4.shareholder_id = s1.shareholder_id AND s4.date = s1.date
+          ) > 1
+          AND (
+            SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at ASC, s2.id ASC LIMIT 1
+          ) > (
+            SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1
+          )
+          GROUP BY shareholder_id, s3.name
+          HAVING total_decrease > 0
+        )
+        SELECT 
+          shareholder_id,
+          shareholder_name,
+          first_shares,
+          final_shares,
+          total_decrease,
+          first_date,
+          last_date
+        FROM period_sellers
+        ORDER BY total_decrease DESC
+      `;
+
+      const allSellersResults = await db.execute(sql.raw(allSellersQuery));
+      const allSellersRows = allSellersResults[0] || [];
+      
+      filteredSellers = allSellersRows.map(row => ({
+        shareholderId: row.shareholder_id,
+        name: row.shareholder_name,
+        initialShares: row.first_shares,
+        finalShares: row.final_shares,
+        totalDecrease: row.total_decrease,
+        decreasePercent: row.first_shares > 0 ? ((row.total_decrease / row.first_shares) * 100).toFixed(2) : '100',
+        initialOwnership: 0, // Would need calculation if needed
+        finalOwnership: 0, // Would need calculation if needed
+        ownershipChange: 0, // Would need calculation if needed
+        exitStatus: row.final_shares === 0 ? 'Full Exit' : 'Partial Exit',
+        sellingDays: 1, // Could be calculated if needed
+        averageDecreasePerSell: row.total_decrease,
+        firstDate: row.first_date,
+        lastDate: row.last_date,
+        sellingActivity: [{
+          date: row.last_date,
+          decrease: row.total_decrease,
+          newTotal: row.final_shares
+        }]
+      }));
+    }
     if (sellerDateFilter) {
-      // Search for shareholders who have data ON that specific date
-      const onDateData = await db
-        .select({
-          shareholderId: shareholdings.shareholderId,
-          shareholderName: shareholders.name,
-          minTimestamp: min(shareholdings.createdAt),
-          maxTimestamp: max(shareholdings.createdAt)
-        })
-        .from(shareholdings)
-        .innerJoin(shareholders, eq(shareholdings.shareholderId, shareholders.id))
-        .where(eq(shareholdings.date, sellerDateFilter))
-        .groupBy(shareholdings.shareholderId, shareholders.name);
+      // Use same SQL query as trend data but for specific date
+      const filterQuery = `
+        WITH daily_sellers AS (
+          SELECT 
+            shareholder_id,
+            s3.name as shareholder_name,
+            (
+              SELECT s2.shares_amount 
+              FROM shareholdings s2 
+              WHERE s2.shareholder_id = s1.shareholder_id 
+              AND s2.date = s1.date 
+              ORDER BY s2.created_at ASC, s2.id ASC 
+              LIMIT 1
+            ) as first_shares,
+            (
+              SELECT s2.shares_amount 
+              FROM shareholdings s2 
+              WHERE s2.shareholder_id = s1.shareholder_id 
+              AND s2.date = s1.date 
+              ORDER BY s2.created_at DESC, s2.id DESC 
+              LIMIT 1
+            ) as last_shares,
+            COUNT(*) as record_count
+          FROM shareholdings s1
+          JOIN shareholders s3 ON s1.shareholder_id = s3.id
+          WHERE date = '${sellerDateFilter}'
+          GROUP BY shareholder_id, s3.name
+          HAVING record_count > 1 AND first_shares > last_shares
+        )
+        SELECT 
+          shareholder_id,
+          shareholder_name,
+          first_shares,
+          last_shares,
+          (first_shares - last_shares) as decrease_amount
+        FROM daily_sellers
+        ORDER BY decrease_amount DESC
+      `;
 
-      // Identify shareholders who reduced positions on that date
-      const validSellerIds = new Set();
+      const filterResults = await db.execute(sql.raw(filterQuery));
+      const filterRows = filterResults[0] || [];
       
-      for (const record of onDateData) {
-        // Get all records for this shareholder on that date, ordered by timestamp and ID
-        const dayRecords = await db
-          .select({
-            shares: shareholdings.sharesAmount,
-            timestamp: shareholdings.createdAt,
-            id: shareholdings.id
-          })
-          .from(shareholdings)
-          .where(and(
-            eq(shareholdings.shareholderId, record.shareholderId),
-            eq(shareholdings.date, sellerDateFilter)
-          ))
-          .orderBy(shareholdings.createdAt, shareholdings.id); // Use ID as tiebreaker for same timestamps
-
-        // If there are multiple records, check for selling activity
-        if (dayRecords.length > 1) {
-          const firstShares = dayRecords[0].shares;
-          const lastShares = dayRecords[dayRecords.length - 1].shares;
-          
-          // If shares decreased from first to last record
-          if (lastShares < firstShares) {
-            validSellerIds.add(record.shareholderId);
-          }
-        }
-      }
-
-      // Update seller statistics based on the specific date filter
-      const updatedSellers = [];
-      for (const seller of activeSellers) {
-        if (validSellerIds.has(seller.shareholderId)) {
-          // Get the actual selling activity on the filter date
-          const dayRecords = await db
-            .select({
-              shares: shareholdings.sharesAmount,
-              timestamp: shareholdings.createdAt
-            })
-            .from(shareholdings)
-            .where(and(
-              eq(shareholdings.shareholderId, seller.shareholderId),
-              eq(shareholdings.date, sellerDateFilter)
-            ))
-            .orderBy(shareholdings.createdAt, shareholdings.id);
-
-          if (dayRecords.length > 1) {
-            const firstShares = dayRecords[0].shares;
-            const lastShares = dayRecords[dayRecords.length - 1].shares;
-            const actualDecrease = firstShares - lastShares;
-
-            // Update the seller with correct statistics from the filter date
-            updatedSellers.push({
-              ...seller,
-              initialShares: firstShares,
-              finalShares: lastShares,
-              totalDecrease: actualDecrease,
-              decreasePercent: firstShares > 0 ? ((actualDecrease / firstShares) * 100).toFixed(2) : '100',
-              exitStatus: lastShares === 0 ? 'Full Exit' : 'Partial Exit',
-              firstDate: sellerDateFilter,
-              lastDate: sellerDateFilter,
-              sellingActivity: [{
-                date: sellerDateFilter,
-                decrease: actualDecrease,
-                newTotal: lastShares
-              }]
-            });
-          }
-        }
-      }
-      
-      filteredSellers = updatedSellers;
+      filteredSellers = filterRows.map(row => ({
+        shareholderId: row.shareholder_id,
+        name: row.shareholder_name,
+        initialShares: row.first_shares,
+        finalShares: row.last_shares,
+        totalDecrease: row.decrease_amount,
+        decreasePercent: row.first_shares > 0 ? ((row.decrease_amount / row.first_shares) * 100).toFixed(2) : '100',
+        initialOwnership: 0, // Would need calculation if needed
+        finalOwnership: 0, // Would need calculation if needed
+        ownershipChange: 0, // Would need calculation if needed
+        exitStatus: row.last_shares === 0 ? 'Full Exit' : 'Partial Exit',
+        sellingDays: 1,
+        averageDecreasePerSell: row.decrease_amount,
+        firstDate: sellerDateFilter,
+        lastDate: sellerDateFilter,
+        sellingActivity: [{
+          date: sellerDateFilter,
+          decrease: row.decrease_amount,
+          newTotal: row.last_shares
+        }]
+      }));
     }
 
     // Calculate pagination
@@ -286,57 +334,105 @@ export async function GET(request: NextRequest) {
     const endIndex = startIndex + limit;
     const paginatedSellers = filteredSellers.slice(startIndex, endIndex);
 
-    // Calculate summary statistics
-    const totalActiveSellers = activeSellers.length;
-    const fullExits = activeSellers.filter(s => s.exitStatus === 'Full Exit' || s.exitStatus === 'Complete Disappearance').length;
-    const partialExits = activeSellers.filter(s => s.exitStatus === 'Partial Exit').length;
-    const totalSharesSold = activeSellers.reduce((sum, seller) => sum + seller.totalDecrease, 0);
+    // Calculate summary statistics - count unique people who sold in the period
+    const summaryQuery = `
+      WITH period_sellers AS (
+        SELECT DISTINCT
+          shareholder_id,
+          SUM(
+            (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at ASC, s2.id ASC LIMIT 1) -
+            (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1)
+          ) as total_sold,
+          MIN(
+            (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1)
+          ) as final_shares
+        FROM shareholdings s1
+        WHERE date >= '${startDate}' AND date <= '${endDate}'
+        AND (
+          SELECT COUNT(*) FROM shareholdings s3 
+          WHERE s3.shareholder_id = s1.shareholder_id AND s3.date = s1.date
+        ) > 1
+        AND (
+          SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at ASC, s2.id ASC LIMIT 1
+        ) > (
+          SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1
+        )
+        GROUP BY shareholder_id
+      )
+      SELECT 
+        COUNT(shareholder_id) as totalActiveSellers,
+        SUM(total_sold) as totalSharesSold,
+        SUM(CASE WHEN final_shares = 0 THEN 1 ELSE 0 END) as fullExits,
+        SUM(CASE WHEN final_shares > 0 THEN 1 ELSE 0 END) as partialExits
+      FROM period_sellers
+    `;
+
+    const summaryResults = await db.execute(sql.raw(summaryQuery));
+    const summaryData = summaryResults[0]?.[0] || {
+      totalActiveSellers: 0,
+      totalSharesSold: 0,
+      fullExits: 0,
+      partialExits: 0
+    };
+
+    const totalActiveSellers = Number(summaryData.totalActiveSellers);
+    const totalSharesSold = Number(summaryData.totalSharesSold);
+    const fullExits = Number(summaryData.fullExits);
+    const partialExits = Number(summaryData.partialExits);
     const averageDecrease = totalActiveSellers > 0 ? Math.round(totalSharesSold / totalActiveSellers) : 0;
     
-    // Get daily/monthly trend data for chart
-    const trendData = [];
-    const dateMap = new Map();
+    // Get daily/monthly trend data using exact sellerDateFilter logic in SQL
+    const dateFormat = periodType === 'monthly' ? 'DATE_FORMAT(date, "%Y-%m")' : 'date';
     
-    activeSellers.forEach(seller => {
-      seller.sellingActivity.forEach(activity => {
-        const dateKey = periodType === 'monthly' 
-          ? activity.date.substring(0, 7)
-          : activity.date;
-          
-        if (!dateMap.has(dateKey)) {
-          dateMap.set(dateKey, {
-            date: dateKey,
-            sellersCount: new Set(),
-            totalDecrease: 0,
-            fullExits: 0,
-            partialExits: 0
-          });
-        }
-        
-        const dayData = dateMap.get(dateKey);
-        dayData.sellersCount.add(seller.shareholderId);
-        dayData.totalDecrease += activity.decrease;
-        
-        if (activity.newTotal === 0) {
-          dayData.fullExits++;
-        } else {
-          dayData.partialExits++;
-        }
-      });
-    });
+    const trendQuery = `
+      WITH daily_sellers AS (
+        SELECT 
+          ${dateFormat} as period,
+          shareholder_id,
+          (
+            SELECT s2.shares_amount 
+            FROM shareholdings s2 
+            WHERE s2.shareholder_id = s1.shareholder_id 
+            AND s2.date = s1.date 
+            ORDER BY s2.created_at ASC, s2.id ASC 
+            LIMIT 1
+          ) as first_shares,
+          (
+            SELECT s2.shares_amount 
+            FROM shareholdings s2 
+            WHERE s2.shareholder_id = s1.shareholder_id 
+            AND s2.date = s1.date 
+            ORDER BY s2.created_at DESC, s2.id DESC 
+            LIMIT 1
+          ) as last_shares,
+          COUNT(*) as record_count
+        FROM shareholdings s1
+        WHERE date >= '${startDate}' AND date <= '${endDate}'
+        GROUP BY shareholder_id, date, period
+        HAVING record_count > 1 AND first_shares > last_shares
+      )
+      SELECT 
+        period as date,
+        COUNT(shareholder_id) as activeSellers,
+        SUM(first_shares - last_shares) as sharesSold,
+        SUM(CASE WHEN last_shares = 0 THEN 1 ELSE 0 END) as fullExits,
+        SUM(CASE WHEN last_shares > 0 THEN 1 ELSE 0 END) as partialExits
+      FROM daily_sellers
+      GROUP BY period
+      ORDER BY period
+    `;
+
+    const trendResults = await db.execute(sql.raw(trendQuery));
     
-    // Convert to array and sort by date
-    for (const [date, data] of dateMap) {
-      trendData.push({
-        date: date,
-        activeSellers: data.sellersCount.size,
-        sharesSold: data.totalDecrease,
-        fullExits: data.fullExits,
-        partialExits: data.partialExits
-      });
-    }
-    
-    trendData.sort((a, b) => a.date.localeCompare(b.date));
+    // Extract actual data from the result structure
+    const rawRows = trendResults[0] || [];
+    const trendData = rawRows.map(row => ({
+      date: row.date,
+      activeSellers: Number(row.activeSellers),
+      sharesSold: Number(row.sharesSold),
+      fullExits: Number(row.fullExits),
+      partialExits: Number(row.partialExits)
+    }));
 
     return NextResponse.json({
       summary: {
