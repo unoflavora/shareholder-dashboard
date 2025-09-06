@@ -27,37 +27,44 @@ export async function GET(request: NextRequest) {
     // Apply buyer date filter if provided, otherwise use same logic as summary
     let filteredBuyers = [];
     if (!buyerDateFilter) {
-      // Use same logic as summary to get all buyers in the period
+      // Use same logic as summary to get all buyers in the period (D-1 vs D logic)
       const allBuyersQuery = `
-        WITH period_buyers AS (
+        WITH daily_positions AS (
           SELECT 
-            shareholder_id,
+            s1.shareholder_id,
+            s1.date,
             s3.name as shareholder_name,
-            SUM(
-              (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) -
-              (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at ASC, s2.id ASC LIMIT 1)
-            ) as total_increase,
-            MIN(
-              (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at ASC, s2.id ASC LIMIT 1)
-            ) as first_shares,
-            MAX(
-              (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1)
-            ) as final_shares,
-            MIN(date) as first_date,
-            MAX(date) as last_date
+            (SELECT s2.shares_amount FROM shareholdings s2 
+             WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
+             ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_shares
           FROM shareholdings s1
           JOIN shareholders s3 ON s1.shareholder_id = s3.id
-          WHERE date >= '${startDate}' AND date <= '${endDate}'
-          AND (
-            SELECT COUNT(*) FROM shareholdings s4 
-            WHERE s4.shareholder_id = s1.shareholder_id AND s4.date = s1.date
-          ) > 1
-          AND (
-            SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1
-          ) > (
-            SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at ASC, s2.id ASC LIMIT 1
+          WHERE s1.date >= '${startDate}' AND s1.date <= '${endDate}'
+          GROUP BY s1.shareholder_id, s1.date, s3.name
+        ),
+        period_buyers AS (
+          SELECT 
+            dp.shareholder_id,
+            dp.shareholder_name,
+            SUM(
+              dp.latest_shares - COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
+                                         WHERE dp2.shareholder_id = dp.shareholder_id 
+                                         AND dp2.date = DATE_SUB(dp.date, INTERVAL 1 DAY)), 0)
+            ) as total_increase,
+            MIN((SELECT dp2.latest_shares FROM daily_positions dp2 
+                 WHERE dp2.shareholder_id = dp.shareholder_id 
+                 ORDER BY dp2.date ASC LIMIT 1)) as first_shares,
+            MAX(dp.latest_shares) as final_shares,
+            MIN(dp.date) as first_date,
+            MAX(dp.date) as last_date
+          FROM daily_positions dp
+          WHERE EXISTS (
+            SELECT 1 FROM daily_positions dp_prev 
+            WHERE dp_prev.shareholder_id = dp.shareholder_id 
+            AND dp_prev.date = DATE_SUB(dp.date, INTERVAL 1 DAY)
+            AND dp_prev.latest_shares < dp.latest_shares
           )
-          GROUP BY shareholder_id, s3.name
+          GROUP BY dp.shareholder_id, dp.shareholder_name
           HAVING total_increase > 0
         )
         SELECT 
@@ -97,41 +104,39 @@ export async function GET(request: NextRequest) {
       }));
     }
     if (buyerDateFilter) {
-      // Use same SQL query as trend data but for specific date
+      // Use D-1 vs D logic for specific date
       const filterQuery = `
-        WITH daily_buyers AS (
+        WITH daily_positions AS (
           SELECT 
-            shareholder_id,
+            s1.shareholder_id,
+            s1.date,
             s3.name as shareholder_name,
-            (
-              SELECT s2.shares_amount 
-              FROM shareholdings s2 
-              WHERE s2.shareholder_id = s1.shareholder_id 
-              AND s2.date = s1.date 
-              ORDER BY s2.created_at ASC, s2.id ASC 
-              LIMIT 1
-            ) as first_shares,
-            (
-              SELECT s2.shares_amount 
-              FROM shareholdings s2 
-              WHERE s2.shareholder_id = s1.shareholder_id 
-              AND s2.date = s1.date 
-              ORDER BY s2.created_at DESC, s2.id DESC 
-              LIMIT 1
-            ) as last_shares,
-            COUNT(*) as record_count
+            (SELECT s2.shares_amount FROM shareholdings s2 
+             WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
+             ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_shares
           FROM shareholdings s1
           JOIN shareholders s3 ON s1.shareholder_id = s3.id
-          WHERE date = '${buyerDateFilter}'
-          GROUP BY shareholder_id, s3.name
-          HAVING record_count > 1 AND last_shares > first_shares
+          WHERE s1.date IN ('${buyerDateFilter}', DATE_SUB('${buyerDateFilter}', INTERVAL 1 DAY))
+          GROUP BY s1.shareholder_id, s1.date, s3.name
+        ),
+        daily_buyers AS (
+          SELECT 
+            dp_current.shareholder_id,
+            dp_current.shareholder_name,
+            COALESCE(dp_prev.latest_shares, 0) as prev_shares,
+            dp_current.latest_shares as current_shares
+          FROM daily_positions dp_current
+          LEFT JOIN daily_positions dp_prev ON dp_prev.shareholder_id = dp_current.shareholder_id 
+            AND dp_prev.date = DATE_SUB('${buyerDateFilter}', INTERVAL 1 DAY)
+          WHERE dp_current.date = '${buyerDateFilter}'
+            AND dp_current.latest_shares > COALESCE(dp_prev.latest_shares, 0)
         )
         SELECT 
           shareholder_id,
           shareholder_name,
-          first_shares,
-          last_shares,
-          (last_shares - first_shares) as increase_amount
+          prev_shares as first_shares,
+          current_shares as last_shares,
+          (current_shares - prev_shares) as increase_amount
         FROM daily_buyers
         ORDER BY increase_amount DESC
       `;
@@ -168,36 +173,43 @@ export async function GET(request: NextRequest) {
     const endIndex = startIndex + limit;
     const paginatedBuyers = filteredBuyers.slice(startIndex, endIndex);
 
-    // Calculate summary statistics - count unique people who bought in the period
+    // Calculate summary statistics - count unique people who bought in the period (D-1 vs D logic)
     const summaryQuery = `
-      WITH period_buyers AS (
-        SELECT DISTINCT
+      WITH daily_positions AS (
+        SELECT 
           shareholder_id,
-          SUM(
-            (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) -
-            (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at ASC, s2.id ASC LIMIT 1)
-          ) as total_bought,
-          MAX(
-            (SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1)
-          ) as final_shares
+          date,
+          (SELECT s2.shares_amount FROM shareholdings s2 
+           WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
+           ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_shares
         FROM shareholdings s1
         WHERE date >= '${startDate}' AND date <= '${endDate}'
-        AND (
-          SELECT COUNT(*) FROM shareholdings s3 
-          WHERE s3.shareholder_id = s1.shareholder_id AND s3.date = s1.date
-        ) > 1
-        AND (
-          SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1
-        ) > (
-          SELECT s2.shares_amount FROM shareholdings s2 WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date ORDER BY s2.created_at ASC, s2.id ASC LIMIT 1
+        GROUP BY shareholder_id, date
+      ),
+      buyers_with_changes AS (
+        SELECT DISTINCT
+          dp.shareholder_id,
+          SUM(
+            dp.latest_shares - COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
+                                        WHERE dp2.shareholder_id = dp.shareholder_id 
+                                        AND dp2.date = DATE_SUB(dp.date, INTERVAL 1 DAY)), 0)
+          ) as total_bought,
+          MAX(dp.latest_shares) as final_shares
+        FROM daily_positions dp
+        WHERE EXISTS (
+          SELECT 1 FROM daily_positions dp_prev 
+          WHERE dp_prev.shareholder_id = dp.shareholder_id 
+          AND dp_prev.date = DATE_SUB(dp.date, INTERVAL 1 DAY)
+          AND dp_prev.latest_shares < dp.latest_shares
         )
-        GROUP BY shareholder_id
+        GROUP BY dp.shareholder_id
+        HAVING total_bought > 0
       )
       SELECT 
         COUNT(shareholder_id) as totalActiveBuyers,
         SUM(total_bought) as totalSharesAccumulated,
         AVG(total_bought) as averageIncrease
-      FROM period_buyers
+      FROM buyers_with_changes
     `;
 
     const summaryResults = await db.execute(sql.raw(summaryQuery));
@@ -211,40 +223,42 @@ export async function GET(request: NextRequest) {
     const totalSharesAccumulated = Number(summaryData.totalSharesAccumulated);
     const averageIncrease = Math.round(Number(summaryData.averageIncrease) || 0);
     
-    // Get daily/monthly trend data using exact buyerDateFilter logic in SQL
+    // Get daily/monthly trend data using D-1 vs D logic
     const dateFormat = periodType === 'monthly' ? 'DATE_FORMAT(date, "%Y-%m")' : 'date';
     
     const trendQuery = `
-      WITH daily_buyers AS (
+      WITH daily_positions AS (
         SELECT 
-          ${dateFormat} as period,
           shareholder_id,
-          (
-            SELECT s2.shares_amount 
-            FROM shareholdings s2 
-            WHERE s2.shareholder_id = s1.shareholder_id 
-            AND s2.date = s1.date 
-            ORDER BY s2.created_at ASC, s2.id ASC 
-            LIMIT 1
-          ) as first_shares,
-          (
-            SELECT s2.shares_amount 
-            FROM shareholdings s2 
-            WHERE s2.shareholder_id = s1.shareholder_id 
-            AND s2.date = s1.date 
-            ORDER BY s2.created_at DESC, s2.id DESC 
-            LIMIT 1
-          ) as last_shares,
-          COUNT(*) as record_count
+          date,
+          ${dateFormat} as period,
+          (SELECT s2.shares_amount FROM shareholdings s2 
+           WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
+           ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_shares
         FROM shareholdings s1
         WHERE date >= '${startDate}' AND date <= '${endDate}'
         GROUP BY shareholder_id, date, period
-        HAVING record_count > 1 AND last_shares > first_shares
+      ),
+      daily_buyers AS (
+        SELECT 
+          dp.period,
+          dp.shareholder_id,
+          COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
+                   WHERE dp2.shareholder_id = dp.shareholder_id 
+                   AND dp2.date = DATE_SUB(dp.date, INTERVAL 1 DAY)), 0) as prev_shares,
+          dp.latest_shares as current_shares
+        FROM daily_positions dp
+        WHERE EXISTS (
+          SELECT 1 FROM daily_positions dp_prev 
+          WHERE dp_prev.shareholder_id = dp.shareholder_id 
+          AND dp_prev.date = DATE_SUB(dp.date, INTERVAL 1 DAY)
+          AND dp_prev.latest_shares < dp.latest_shares
+        )
       )
       SELECT 
         period as date,
         COUNT(shareholder_id) as activeBuyers,
-        SUM(last_shares - first_shares) as sharesAccumulated
+        SUM(current_shares - prev_shares) as sharesAccumulated
       FROM daily_buyers
       GROUP BY period
       ORDER BY period
