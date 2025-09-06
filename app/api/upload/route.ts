@@ -281,16 +281,24 @@ export async function POST(req: NextRequest) {
           .limit(1);
 
         if (existingHolding.length > 0) {
-          // Update existing holding
+          // Update existing holding with unique timestamp
+          const baseTimestamp = new Date();
+          const uniqueTimestamp = new Date(baseTimestamp.getTime() + (i * 1000)); // Add milliseconds per row
+          
           await db
             .update(shareholdings)
             .set({
               sharesAmount: shares,
               percentage,
+              createdAt: uniqueTimestamp,
             })
             .where(eq(shareholdings.id, existingHolding[0].id));
         } else {
-          // Create new shareholding
+          // Create new shareholding with unique timestamp
+          const baseTimestamp = new Date();
+          // Add microseconds based on row index to ensure unique timestamps
+          const uniqueTimestamp = new Date(baseTimestamp.getTime() + (i * 1000)); // Add milliseconds per row
+          
           await db
             .insert(shareholdings)
             .values({
@@ -298,6 +306,7 @@ export async function POST(req: NextRequest) {
               sharesAmount: shares,
               percentage,
               date: dateString,
+              createdAt: uniqueTimestamp,
             });
         }
 

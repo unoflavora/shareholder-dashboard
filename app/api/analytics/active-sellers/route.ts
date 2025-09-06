@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db/client';
 import { shareholdings, shareholders } from '@/lib/db/schema';
-import { sql, and, gte, lte, eq } from 'drizzle-orm';
+import { sql, and, gte, lte, eq, min, max } from 'drizzle-orm';
 
 export async function GET(request: NextRequest) {
   try {
@@ -147,28 +147,41 @@ export async function GET(request: NextRequest) {
     for (const [shareholderId, beforeData] of beforePeriodMap) {
       const inPeriod = shareholderMap.has(shareholderId);
       if (!inPeriod) {
-        // This shareholder completely exited before or at the start of the period
-        activeSellers.push({
-          shareholderId: shareholderId,
-          name: beforeData.name,
-          initialShares: beforeData.shares,
-          finalShares: 0,
-          totalDecrease: beforeData.shares,
-          decreasePercent: '100',
-          initialOwnership: beforeData.percentage,
-          finalOwnership: 0,
-          ownershipChange: -beforeData.percentage,
-          exitStatus: 'Complete Disappearance',
-          sellingDays: 1,
-          averageDecreasePerSell: beforeData.shares,
-          firstDate: startDate,
-          lastDate: startDate,
-          sellingActivity: [{
-            date: startDate,
-            decrease: beforeData.shares,
-            newTotal: 0
-          }]
-        });
+        // Check if this shareholder actually has zero shares at the end date
+        const latestRecord = await db
+          .select({
+            shares: shareholdings.sharesAmount,
+            date: shareholdings.date
+          })
+          .from(shareholdings)
+          .where(eq(shareholdings.shareholderId, shareholderId))
+          .orderBy(sql`date DESC`)
+          .limit(1);
+        
+        // Only mark as disappeared if they actually have zero shares in their latest record
+        if (latestRecord.length > 0 && latestRecord[0].shares === 0) {
+          activeSellers.push({
+            shareholderId: shareholderId,
+            name: beforeData.name,
+            initialShares: beforeData.shares,
+            finalShares: 0,
+            totalDecrease: beforeData.shares,
+            decreasePercent: '100',
+            initialOwnership: beforeData.percentage,
+            finalOwnership: 0,
+            ownershipChange: -beforeData.percentage,
+            exitStatus: 'Complete Disappearance',
+            sellingDays: 1,
+            averageDecreasePerSell: beforeData.shares,
+            firstDate: latestRecord[0].date,
+            lastDate: latestRecord[0].date,
+            sellingActivity: [{
+              date: latestRecord[0].date,
+              decrease: beforeData.shares,
+              newTotal: 0
+            }]
+          });
+        }
       }
     }
 
@@ -178,11 +191,92 @@ export async function GET(request: NextRequest) {
     // Apply seller date filter if provided
     let filteredSellers = activeSellers;
     if (sellerDateFilter) {
-      filteredSellers = activeSellers.filter(seller => {
-        return seller.sellingActivity.some(activity => 
-          activity.date >= sellerDateFilter
-        );
-      });
+      // Search for shareholders who have data ON that specific date
+      const onDateData = await db
+        .select({
+          shareholderId: shareholdings.shareholderId,
+          shareholderName: shareholders.name,
+          minTimestamp: min(shareholdings.createdAt),
+          maxTimestamp: max(shareholdings.createdAt)
+        })
+        .from(shareholdings)
+        .innerJoin(shareholders, eq(shareholdings.shareholderId, shareholders.id))
+        .where(eq(shareholdings.date, sellerDateFilter))
+        .groupBy(shareholdings.shareholderId, shareholders.name);
+
+      // Identify shareholders who reduced positions on that date
+      const validSellerIds = new Set();
+      
+      for (const record of onDateData) {
+        // Get all records for this shareholder on that date, ordered by timestamp and ID
+        const dayRecords = await db
+          .select({
+            shares: shareholdings.sharesAmount,
+            timestamp: shareholdings.createdAt,
+            id: shareholdings.id
+          })
+          .from(shareholdings)
+          .where(and(
+            eq(shareholdings.shareholderId, record.shareholderId),
+            eq(shareholdings.date, sellerDateFilter)
+          ))
+          .orderBy(shareholdings.createdAt, shareholdings.id); // Use ID as tiebreaker for same timestamps
+
+        // If there are multiple records, check for selling activity
+        if (dayRecords.length > 1) {
+          const firstShares = dayRecords[0].shares;
+          const lastShares = dayRecords[dayRecords.length - 1].shares;
+          
+          // If shares decreased from first to last record
+          if (lastShares < firstShares) {
+            validSellerIds.add(record.shareholderId);
+          }
+        }
+      }
+
+      // Update seller statistics based on the specific date filter
+      const updatedSellers = [];
+      for (const seller of activeSellers) {
+        if (validSellerIds.has(seller.shareholderId)) {
+          // Get the actual selling activity on the filter date
+          const dayRecords = await db
+            .select({
+              shares: shareholdings.sharesAmount,
+              timestamp: shareholdings.createdAt
+            })
+            .from(shareholdings)
+            .where(and(
+              eq(shareholdings.shareholderId, seller.shareholderId),
+              eq(shareholdings.date, sellerDateFilter)
+            ))
+            .orderBy(shareholdings.createdAt, shareholdings.id);
+
+          if (dayRecords.length > 1) {
+            const firstShares = dayRecords[0].shares;
+            const lastShares = dayRecords[dayRecords.length - 1].shares;
+            const actualDecrease = firstShares - lastShares;
+
+            // Update the seller with correct statistics from the filter date
+            updatedSellers.push({
+              ...seller,
+              initialShares: firstShares,
+              finalShares: lastShares,
+              totalDecrease: actualDecrease,
+              decreasePercent: firstShares > 0 ? ((actualDecrease / firstShares) * 100).toFixed(2) : '100',
+              exitStatus: lastShares === 0 ? 'Full Exit' : 'Partial Exit',
+              firstDate: sellerDateFilter,
+              lastDate: sellerDateFilter,
+              sellingActivity: [{
+                date: sellerDateFilter,
+                decrease: actualDecrease,
+                newTotal: lastShares
+              }]
+            });
+          }
+        }
+      }
+      
+      filteredSellers = updatedSellers;
     }
 
     // Calculate pagination

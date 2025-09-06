@@ -1,4 +1,4 @@
-import { mysqlTable, varchar, int, decimal, datetime, boolean, text } from 'drizzle-orm/mysql-core';
+import { mysqlTable, varchar, int, decimal, datetime, boolean, text, timestamp } from 'drizzle-orm/mysql-core';
 import { sql } from 'drizzle-orm';
 
 export const users = mysqlTable('users', {
@@ -24,10 +24,10 @@ export const shareholders = mysqlTable('shareholders', {
 export const shareholdings = mysqlTable('shareholdings', {
   id: int('id').primaryKey().autoincrement(),
   shareholderId: int('shareholder_id').references(() => shareholders.id),
-  date: varchar('date', { length: 10 }).notNull(), // Store as ISO string YYYY-MM-DD
+  date: varchar('date', { length: 10 }).notNull(), // Store as ISO string YYYY-MM-DD, indexed
   sharesAmount: int('shares_amount').notNull(),
   percentage: decimal('percentage', { precision: 10, scale: 6 }).notNull(),
-  createdAt: datetime('created_at').default(sql`CURRENT_TIMESTAMP`),
+  createdAt: timestamp('created_at', { fsp: 6 }).notNull(),
 });
 
 export const uploads = mysqlTable('uploads', {
