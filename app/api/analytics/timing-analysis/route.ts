@@ -20,27 +20,35 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Start date and end date are required' }, { status: 400 });
     }
 
-    // Get all shareholdings within the date range
-    const shareholdingsData = await db
-      .select({
-        shareholderId: shareholdings.shareholderId,
-        shareholderName: shareholders.name,
-        date: shareholdings.date,
-        shares: shareholdings.sharesAmount,
-        percentage: shareholdings.percentage,
-      })
-      .from(shareholdings)
-      .innerJoin(shareholders, eq(shareholdings.shareholderId, shareholders.id))
-      .where(and(
-        gte(shareholdings.date, startDate),
-        lte(shareholdings.date, endDate)
-      ))
-      .orderBy(shareholdings.date, shareholdings.shareholderId);
+    // Get latest shares per day for each shareholder using D-1 vs D logic
+    const dailyPositionsQuery = `
+      WITH daily_positions AS (
+        SELECT 
+          s1.shareholder_id,
+          s3.name as shareholder_name,
+          s1.date,
+          (SELECT s2.shares_amount FROM shareholdings s2 
+           WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
+           ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_shares,
+          (SELECT s2.percentage FROM shareholdings s2 
+           WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
+           ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_percentage
+        FROM shareholdings s1
+        JOIN shareholders s3 ON s1.shareholder_id = s3.id
+        WHERE s1.date >= '${startDate}' AND s1.date <= '${endDate}'
+        GROUP BY s1.shareholder_id, s3.name, s1.date
+        ORDER BY s1.date, s1.shareholder_id
+      )
+      SELECT * FROM daily_positions
+    `;
+
+    const dailyPositionsResult = await db.execute(sql.raw(dailyPositionsQuery));
+    const dailyPositionsData = dailyPositionsResult[0] || [];
 
     // Group by date to analyze market-wide activity
     const dateActivityMap = new Map();
     
-    shareholdingsData.forEach(record => {
+    dailyPositionsData.forEach(record => {
       if (!dateActivityMap.has(record.date)) {
         dateActivityMap.set(record.date, {
           date: record.date,
@@ -52,31 +60,31 @@ export async function GET(request: NextRequest) {
       }
       
       const dayData = dateActivityMap.get(record.date);
-      dayData.totalShares += record.shares;
+      dayData.totalShares += record.latest_shares;
       dayData.shareholders.push({
-        id: record.shareholderId,
-        name: record.shareholderName,
-        shares: record.shares,
-        percentage: record.percentage
+        id: record.shareholder_id,
+        name: record.shareholder_name,
+        shares: record.latest_shares,
+        percentage: record.latest_percentage
       });
     });
 
     // Group by shareholder to track individual patterns
     const shareholderPatterns = new Map();
     
-    shareholdingsData.forEach(record => {
-      if (!shareholderPatterns.has(record.shareholderId)) {
-        shareholderPatterns.set(record.shareholderId, {
-          id: record.shareholderId,
-          name: record.shareholderName,
+    dailyPositionsData.forEach(record => {
+      if (!shareholderPatterns.has(record.shareholder_id)) {
+        shareholderPatterns.set(record.shareholder_id, {
+          id: record.shareholder_id,
+          name: record.shareholder_name,
           records: []
         });
       }
       
-      shareholderPatterns.get(record.shareholderId).records.push({
+      shareholderPatterns.get(record.shareholder_id).records.push({
         date: record.date,
-        shares: record.shares,
-        percentage: record.percentage
+        shares: record.latest_shares,
+        percentage: record.latest_percentage
       });
     });
 
@@ -90,51 +98,64 @@ export async function GET(request: NextRequest) {
       
       if (records.length < 2) continue;
       
-      // Identify buy and sell periods
+      // Identify buy and sell periods using latest available previous data logic
       const buyPeriods = [];
       const sellPeriods = [];
       let entryPoints = [];
       let exitPoints = [];
       
-      for (let i = 1; i < records.length; i++) {
-        const change = records[i].shares - records[i-1].shares;
-        const percentChange = records[i-1].shares > 0 
-          ? ((change / records[i-1].shares) * 100) 
-          : 0;
+      for (let i = 0; i < records.length; i++) {
+        const currentRecord = records[i];
         
-        if (change > 0) {
-          buyPeriods.push({
-            date: records[i].date,
-            amount: change,
-            percentIncrease: percentChange,
-            newTotal: records[i].shares,
-            ownership: records[i].percentage
-          });
-          
-          // If this is a significant buy (>10% increase), mark as entry point
-          if (percentChange > 10) {
-            entryPoints.push({
-              date: records[i].date,
-              shares: change,
-              totalAfter: records[i].shares
-            });
+        // Find the latest record before this date
+        let prevRecord = null;
+        for (let j = i - 1; j >= 0; j--) {
+          if (records[j].date < currentRecord.date) {
+            prevRecord = records[j];
+            break;
           }
-        } else if (change < 0) {
-          sellPeriods.push({
-            date: records[i].date,
-            amount: Math.abs(change),
-            percentDecrease: Math.abs(percentChange),
-            newTotal: records[i].shares,
-            ownership: records[i].percentage
-          });
+        }
+        
+        if (prevRecord) {
+          const change = currentRecord.shares - prevRecord.shares;
+          const percentChange = prevRecord.shares > 0 
+            ? ((change / prevRecord.shares) * 100) 
+            : 0;
           
-          // If this is a significant sell (>10% decrease), mark as exit point
-          if (Math.abs(percentChange) > 10) {
-            exitPoints.push({
-              date: records[i].date,
-              shares: Math.abs(change),
-              totalAfter: records[i].shares
+          if (change > 0) {
+            buyPeriods.push({
+              date: currentRecord.date,
+              amount: change,
+              percentIncrease: percentChange,
+              newTotal: currentRecord.shares,
+              ownership: currentRecord.percentage
             });
+            
+            // If this is a significant buy (>10% increase), mark as entry point
+            if (percentChange > 10) {
+              entryPoints.push({
+                date: currentRecord.date,
+                shares: change,
+                totalAfter: currentRecord.shares
+              });
+            }
+          } else if (change < 0) {
+            sellPeriods.push({
+              date: currentRecord.date,
+              amount: Math.abs(change),
+              percentDecrease: Math.abs(percentChange),
+              newTotal: currentRecord.shares,
+              ownership: currentRecord.percentage
+            });
+            
+            // If this is a significant sell (>10% decrease), mark as exit point
+            if (Math.abs(percentChange) > 10) {
+              exitPoints.push({
+                date: currentRecord.date,
+                shares: Math.abs(change),
+                totalAfter: currentRecord.shares
+              });
+            }
           }
         }
       }

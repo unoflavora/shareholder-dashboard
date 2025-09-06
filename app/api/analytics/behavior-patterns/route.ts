@@ -21,42 +21,50 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Start date and end date are required' }, { status: 400 });
     }
 
-    // Get all shareholdings within the date range
-    const shareholdingsData = await db
-      .select({
-        shareholderId: shareholdings.shareholderId,
-        shareholderName: shareholders.name,
-        accountHolder: shareholders.accountHolder,
-        date: shareholdings.date,
-        shares: shareholdings.sharesAmount,
-        percentage: shareholdings.percentage,
-      })
-      .from(shareholdings)
-      .innerJoin(shareholders, eq(shareholdings.shareholderId, shareholders.id))
-      .where(and(
-        gte(shareholdings.date, startDate),
-        lte(shareholdings.date, endDate)
-      ))
-      .orderBy(shareholdings.date, shareholdings.shareholderId);
+    // Get latest shares per day for each shareholder using D-1 vs D logic
+    const dailyPositionsQuery = `
+      WITH daily_positions AS (
+        SELECT 
+          s1.shareholder_id,
+          s3.name as shareholder_name,
+          s3.account_holder,
+          s1.date,
+          (SELECT s2.shares_amount FROM shareholdings s2 
+           WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
+           ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_shares,
+          (SELECT s2.percentage FROM shareholdings s2 
+           WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
+           ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_percentage
+        FROM shareholdings s1
+        JOIN shareholders s3 ON s1.shareholder_id = s3.id
+        WHERE s1.date >= '${startDate}' AND s1.date <= '${endDate}'
+        GROUP BY s1.shareholder_id, s3.name, s3.account_holder, s1.date
+        ORDER BY s1.date, s1.shareholder_id
+      )
+      SELECT * FROM daily_positions
+    `;
+
+    const dailyPositionsResult = await db.execute(sql.raw(dailyPositionsQuery));
+    const dailyPositionsData = dailyPositionsResult[0] || [];
 
     // Group by shareholder and create activity profiles
     const shareholderProfiles = new Map();
     
-    shareholdingsData.forEach(record => {
-      if (!shareholderProfiles.has(record.shareholderId)) {
-        shareholderProfiles.set(record.shareholderId, {
-          id: record.shareholderId,
-          name: record.shareholderName,
-          accountHolder: record.accountHolder,
+    dailyPositionsData.forEach(record => {
+      if (!shareholderProfiles.has(record.shareholder_id)) {
+        shareholderProfiles.set(record.shareholder_id, {
+          id: record.shareholder_id,
+          name: record.shareholder_name,
+          accountHolder: record.account_holder,
           activities: []
         });
       }
       
-      const profile = shareholderProfiles.get(record.shareholderId);
+      const profile = shareholderProfiles.get(record.shareholder_id);
       profile.activities.push({
         date: record.date,
-        shares: record.shares,
-        percentage: record.percentage
+        shares: record.latest_shares,
+        percentage: record.latest_percentage
       });
     });
 
@@ -82,24 +90,50 @@ export async function GET(request: NextRequest) {
         behavior: 'stable'
       };
       
-      // Analyze changes between consecutive records
-      for (let i = 1; i < activities.length; i++) {
-        const change = activities[i].shares - activities[i-1].shares;
-        if (change > 0) {
-          pattern.buyingDates.push(activities[i].date);
-          pattern.accumulation += change;
-        } else if (change < 0) {
-          pattern.sellingDates.push(activities[i].date);
-          pattern.reduction += Math.abs(change);
+      // Analyze changes using latest available previous data logic (compare each day with latest previous record)
+      for (let i = 0; i < activities.length; i++) {
+        const currentActivity = activities[i];
+        
+        // Find the latest record before this date
+        let prevRecord = null;
+        for (let j = i - 1; j >= 0; j--) {
+          if (activities[j].date < currentActivity.date) {
+            prevRecord = activities[j];
+            break;
+          }
+        }
+        
+        if (prevRecord) {
+          const change = currentActivity.shares - prevRecord.shares;
+          if (change > 0) {
+            pattern.buyingDates.push(currentActivity.date);
+            pattern.accumulation += change;
+          } else if (change < 0) {
+            pattern.sellingDates.push(currentActivity.date);
+            pattern.reduction += Math.abs(change);
+          }
         }
       }
       
       pattern.netChange = activities[activities.length - 1].shares - activities[0].shares;
       
-      // Calculate volatility (standard deviation of changes)
+      // Calculate volatility (standard deviation of changes) using latest available previous data logic
       const changes = [];
-      for (let i = 1; i < activities.length; i++) {
-        changes.push(activities[i].shares - activities[i-1].shares);
+      for (let i = 0; i < activities.length; i++) {
+        const currentActivity = activities[i];
+        
+        // Find the latest record before this date
+        let prevRecord = null;
+        for (let j = i - 1; j >= 0; j--) {
+          if (activities[j].date < currentActivity.date) {
+            prevRecord = activities[j];
+            break;
+          }
+        }
+        
+        if (prevRecord) {
+          changes.push(currentActivity.shares - prevRecord.shares);
+        }
       }
       if (changes.length > 0) {
         const avgChange = changes.reduce((a, b) => a + b, 0) / changes.length;
