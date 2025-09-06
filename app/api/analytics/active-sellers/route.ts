@@ -27,85 +27,67 @@ export async function GET(request: NextRequest) {
     // Apply seller date filter if provided, otherwise use same logic as summary
     let filteredSellers = [];
     if (!sellerDateFilter) {
-      // Use same logic as summary to get all sellers in the period (latest available previous data logic)
+      // Fast sellers query using window functions
       const allSellersQuery = `
-        WITH daily_positions AS (
+        WITH daily_data AS (
           SELECT 
             s1.shareholder_id,
-            s1.date,
             s3.name as shareholder_name,
-            (SELECT s2.shares_amount FROM shareholdings s2 
-             WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
-             ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_shares
+            s1.date,
+            MAX(s1.shares_amount) as shares_amount,
+            LAG(MAX(s1.shares_amount)) OVER (PARTITION BY s1.shareholder_id ORDER BY s1.date) as prev_shares
           FROM shareholdings s1
           JOIN shareholders s3 ON s1.shareholder_id = s3.id
-          WHERE s1.date >= '${startDate}' AND s1.date <= '${endDate}'
-          GROUP BY s1.shareholder_id, s1.date, s3.name
+          WHERE s1.date BETWEEN DATE_SUB('${startDate}', INTERVAL 30 DAY) AND '${endDate}'
+          GROUP BY s1.shareholder_id, s3.name, s1.date
         ),
-        period_sellers AS (
+        seller_changes AS (
           SELECT 
-            dp.shareholder_id,
-            dp.shareholder_name,
-            SUM(
-              CASE 
-                WHEN COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
-                             WHERE dp2.shareholder_id = dp.shareholder_id 
-                             AND dp2.date < dp.date
-                             ORDER BY dp2.date DESC LIMIT 1), 0) > dp.latest_shares
-                THEN COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
-                             WHERE dp2.shareholder_id = dp.shareholder_id 
-                             AND dp2.date < dp.date
-                             ORDER BY dp2.date DESC LIMIT 1), 0) - dp.latest_shares
-                ELSE 0
-              END
-            ) as total_decrease,
-            MIN((SELECT dp2.latest_shares FROM daily_positions dp2 
-                 WHERE dp2.shareholder_id = dp.shareholder_id 
-                 ORDER BY dp2.date ASC LIMIT 1)) as first_shares,
-            MIN(dp.latest_shares) as final_shares,
-            MIN(dp.date) as first_date,
-            MAX(dp.date) as last_date
-          FROM daily_positions dp
-          GROUP BY dp.shareholder_id, dp.shareholder_name
-          HAVING total_decrease > 0
+            shareholder_id,
+            shareholder_name,
+            MIN(CASE WHEN date >= '${startDate}' THEN COALESCE(prev_shares, shares_amount) END) as initial_shares,
+            MAX(CASE WHEN date >= '${startDate}' AND date <= '${endDate}' THEN shares_amount END) as final_shares,
+            MIN(CASE WHEN date >= '${startDate}' THEN date END) as first_date,
+            MAX(CASE WHEN date >= '${startDate}' AND date <= '${endDate}' THEN date END) as last_date
+          FROM daily_data
+          GROUP BY shareholder_id, shareholder_name
+          HAVING MIN(CASE WHEN date >= '${startDate}' THEN COALESCE(prev_shares, shares_amount) END) > 
+                 MAX(CASE WHEN date >= '${startDate}' AND date <= '${endDate}' THEN shares_amount END)
         )
-        SELECT 
-          shareholder_id,
-          shareholder_name,
-          first_shares,
-          final_shares,
-          total_decrease,
-          first_date,
-          last_date
-        FROM period_sellers
-        WHERE total_decrease > 0
-        ORDER BY total_decrease DESC
+        SELECT *, (initial_shares - final_shares) as total_decrease FROM seller_changes 
+        ORDER BY (initial_shares - final_shares) DESC
       `;
 
       const allSellersResults = await db.execute(sql.raw(allSellersQuery));
       const allSellersRows = allSellersResults[0] || [];
       
-      filteredSellers = allSellersRows.map(row => ({
-          shareholderId: row.shareholder_id,
+      filteredSellers = allSellersRows.map(row => {
+        const finalShares = Number(row.final_shares);
+        const totalDecrease = Number(row.total_decrease);
+        const initialShares = Number(row.initial_shares) || 0;
+        
+        return {
+          shareholderId: Number(row.shareholder_id),
           name: row.shareholder_name,
-          initialShares: row.first_shares,
-          finalShares: row.final_shares,
-          totalDecrease: row.total_decrease,
-          decreasePercent: row.first_shares > 0 ? ((row.total_decrease / row.first_shares) * 100).toFixed(2) : '100',
+          initialShares: initialShares,
+          finalShares: finalShares,
+          totalDecrease: totalDecrease,
+          decreasePercent: initialShares > 0 ? ((totalDecrease / initialShares) * 100).toFixed(2) : '0',
           initialOwnership: 0, // Would need calculation if needed
           finalOwnership: 0, // Would need calculation if needed
           ownershipChange: 0, // Would need calculation if needed
-          exitStatus: row.final_shares === 0 ? 'Full Exit' : 'Partial Exit',
-          sellingDays: 1, // Could be calculated if needed
-          averageDecreasePerSell: row.total_decrease,
+          exitStatus: finalShares === 0 ? 'Full Exit' : 'Partial Exit',
+          sellingDays: 1,
+          averageDecreasePerSell: totalDecrease,
           firstDate: row.first_date,
           lastDate: row.last_date,
           sellingActivity: [{
             date: row.last_date,
-            decrease: row.total_decrease,
-            newTotal: row.final_shares
+            decrease: totalDecrease,
+            newTotal: finalShares
           }]
-        }));
+        };
+      });
     }
     if (sellerDateFilter) {
       // Use same logic as trend query but filtered for specific date
@@ -185,46 +167,34 @@ export async function GET(request: NextRequest) {
     const endIndex = startIndex + limit;
     const paginatedSellers = filteredSellers.slice(startIndex, endIndex);
 
-    // Calculate summary statistics - count unique people who sold in the period (latest available previous data logic)
+    // Fast summary query using same logic as main query
     const summaryQuery = `
-      WITH daily_positions AS (
+      WITH daily_data AS (
+        SELECT 
+          s1.shareholder_id,
+          s1.date,
+          MAX(s1.shares_amount) as shares_amount,
+          LAG(MAX(s1.shares_amount)) OVER (PARTITION BY s1.shareholder_id ORDER BY s1.date) as prev_shares
+        FROM shareholdings s1
+        WHERE s1.date BETWEEN DATE_SUB('${startDate}', INTERVAL 30 DAY) AND '${endDate}'
+        GROUP BY s1.shareholder_id, s1.date
+      ),
+      seller_summary AS (
         SELECT 
           shareholder_id,
-          date,
-          (SELECT s2.shares_amount FROM shareholdings s2 
-           WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
-           ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_shares
-        FROM shareholdings s1
-        WHERE date >= '${startDate}' AND date <= '${endDate}'
-        GROUP BY shareholder_id, date
-      ),
-      sellers_with_changes AS (
-        SELECT DISTINCT
-          dp.shareholder_id,
-          SUM(
-            CASE 
-              WHEN COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
-                           WHERE dp2.shareholder_id = dp.shareholder_id 
-                           AND dp2.date < dp.date
-                           ORDER BY dp2.date DESC LIMIT 1), 0) > dp.latest_shares
-              THEN COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
-                           WHERE dp2.shareholder_id = dp.shareholder_id 
-                           AND dp2.date < dp.date
-                           ORDER BY dp2.date DESC LIMIT 1), 0) - dp.latest_shares
-              ELSE 0
-            END
-          ) as total_sold,
-          MIN(dp.latest_shares) as final_shares
-        FROM daily_positions dp
-        GROUP BY dp.shareholder_id
-        HAVING total_sold > 0
+          MIN(CASE WHEN date >= '${startDate}' THEN COALESCE(prev_shares, shares_amount) END) as initial_shares,
+          MAX(CASE WHEN date >= '${startDate}' AND date <= '${endDate}' THEN shares_amount END) as final_shares
+        FROM daily_data
+        GROUP BY shareholder_id
+        HAVING MIN(CASE WHEN date >= '${startDate}' THEN COALESCE(prev_shares, shares_amount) END) > 
+               MAX(CASE WHEN date >= '${startDate}' AND date <= '${endDate}' THEN shares_amount END)
       )
       SELECT 
         COUNT(shareholder_id) as totalActiveSellers,
-        SUM(total_sold) as totalSharesSold,
+        SUM(initial_shares - final_shares) as totalSharesSold,
         SUM(CASE WHEN final_shares = 0 THEN 1 ELSE 0 END) as fullExits,
         SUM(CASE WHEN final_shares > 0 THEN 1 ELSE 0 END) as partialExits
-      FROM sellers_with_changes
+      FROM seller_summary
     `;
 
     const summaryResults = await db.execute(sql.raw(summaryQuery));

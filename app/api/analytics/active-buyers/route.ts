@@ -27,84 +27,70 @@ export async function GET(request: NextRequest) {
     // Apply buyer date filter if provided, otherwise use same logic as summary
     let filteredBuyers = [];
     if (!buyerDateFilter) {
-      // Use same logic as summary to get all buyers in the period (latest available previous data logic)
+      // Much faster query using window functions
       const allBuyersQuery = `
-        WITH daily_positions AS (
+        WITH daily_data AS (
           SELECT 
             s1.shareholder_id,
-            s1.date,
             s3.name as shareholder_name,
-            (SELECT s2.shares_amount FROM shareholdings s2 
-             WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
-             ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_shares
+            s1.date,
+            MAX(s1.shares_amount) as shares_amount,
+            LAG(MAX(s1.shares_amount)) OVER (PARTITION BY s1.shareholder_id ORDER BY s1.date) as prev_shares
           FROM shareholdings s1
           JOIN shareholders s3 ON s1.shareholder_id = s3.id
-          WHERE s1.date >= '${startDate}' AND s1.date <= '${endDate}'
-          GROUP BY s1.shareholder_id, s1.date, s3.name
+          WHERE s1.date BETWEEN DATE_SUB('${startDate}', INTERVAL 30 DAY) AND '${endDate}'
+          GROUP BY s1.shareholder_id, s3.name, s1.date
         ),
-        period_buyers AS (
+        buyer_changes AS (
           SELECT 
-            dp.shareholder_id,
-            dp.shareholder_name,
-            SUM(
-              CASE 
-                WHEN dp.latest_shares > COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
-                                                WHERE dp2.shareholder_id = dp.shareholder_id 
-                                                AND dp2.date < dp.date
-                                                ORDER BY dp2.date DESC LIMIT 1), 0)
-                THEN dp.latest_shares - COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
-                                                WHERE dp2.shareholder_id = dp.shareholder_id 
-                                                AND dp2.date < dp.date
-                                                ORDER BY dp2.date DESC LIMIT 1), 0)
-                ELSE 0
-              END
-            ) as total_increase,
-            MIN((SELECT dp2.latest_shares FROM daily_positions dp2 
-                 WHERE dp2.shareholder_id = dp.shareholder_id 
-                 ORDER BY dp2.date ASC LIMIT 1)) as first_shares,
-            MAX(dp.latest_shares) as final_shares,
-            MIN(dp.date) as first_date,
-            MAX(dp.date) as last_date
-          FROM daily_positions dp
-          GROUP BY dp.shareholder_id, dp.shareholder_name
+            shareholder_id,
+            shareholder_name,
+            SUM(CASE 
+              WHEN date >= '${startDate}' AND shares_amount > COALESCE(prev_shares, 0)
+              THEN shares_amount - COALESCE(prev_shares, 0)
+              ELSE 0 
+            END) as total_increase,
+            MAX(CASE WHEN date >= '${startDate}' AND date <= '${endDate}' THEN shares_amount END) as final_shares,
+            MIN(CASE WHEN date >= '${startDate}' THEN prev_shares END) as initial_shares,
+            MIN(CASE WHEN date >= '${startDate}' THEN date END) as first_date,
+            MAX(CASE WHEN date >= '${startDate}' AND date <= '${endDate}' THEN date END) as last_date
+          FROM daily_data
+          GROUP BY shareholder_id, shareholder_name
           HAVING total_increase > 0
         )
-        SELECT 
-          shareholder_id,
-          shareholder_name,
-          first_shares,
-          final_shares,
-          total_increase,
-          first_date,
-          last_date
-        FROM period_buyers
-        WHERE total_increase > 0
+        SELECT * FROM buyer_changes 
         ORDER BY total_increase DESC
       `;
 
       const allBuyersResults = await db.execute(sql.raw(allBuyersQuery));
       const allBuyersRows = allBuyersResults[0] || [];
       
-      filteredBuyers = allBuyersRows.map(row => ({
-        shareholderId: row.shareholder_id,
-        name: row.shareholder_name,
-        initialShares: row.first_shares,
-        finalShares: row.final_shares,
-        totalIncrease: row.total_increase,
-        increasePercent: row.first_shares > 0 ? ((row.total_increase / row.first_shares) * 100).toFixed(2) : '100',
-        initialOwnership: 0, // Would need calculation if needed
-        finalOwnership: 0, // Would need calculation if needed
-        ownershipChange: 0, // Would need calculation if needed
-        buyingDays: 1, // Could be calculated if needed
-        averageIncreasePerBuy: row.total_increase,
-        firstDate: row.first_date,
-        lastDate: row.last_date,
-        buyingActivity: [{
-          date: row.last_date,
-          increase: row.total_increase,
-          newTotal: row.final_shares
-        }]
-      }));
+      filteredBuyers = allBuyersRows.map(row => {
+        const finalShares = Number(row.final_shares);
+        const totalIncrease = Number(row.total_increase);
+        const initialShares = Number(row.initial_shares) || 0;
+        
+        return {
+          shareholderId: Number(row.shareholder_id),
+          name: row.shareholder_name,
+          initialShares: initialShares,
+          finalShares: finalShares,
+          totalIncrease: totalIncrease,
+          increasePercent: initialShares > 0 ? ((totalIncrease / initialShares) * 100).toFixed(2) : '100',
+          initialOwnership: 0,
+          finalOwnership: 0,
+          ownershipChange: 0,
+          buyingDays: 1,
+          averageIncreasePerBuy: totalIncrease,
+          firstDate: row.first_date,
+          lastDate: row.last_date,
+          buyingActivity: [{
+            date: row.last_date,
+            increase: totalIncrease,
+            newTotal: finalShares
+          }]
+        };
+      });
     }
     if (buyerDateFilter) {
       // Use same logic as trend query but filtered for specific date
@@ -159,26 +145,32 @@ export async function GET(request: NextRequest) {
       const filterResults = await db.execute(sql.raw(filterQuery));
       const filterRows = filterResults[0] || [];
       
-      filteredBuyers = filterRows.map(row => ({
-        shareholderId: row.shareholder_id,
-        name: row.shareholder_name,
-        initialShares: row.first_shares,
-        finalShares: row.last_shares,
-        totalIncrease: row.increase_amount,
-        increasePercent: row.first_shares > 0 ? ((row.increase_amount / row.first_shares) * 100).toFixed(2) : '100',
-        initialOwnership: 0, // Would need calculation if needed
-        finalOwnership: 0, // Would need calculation if needed
-        ownershipChange: 0, // Would need calculation if needed
-        buyingDays: 1,
-        averageIncreasePerBuy: row.increase_amount,
-        firstDate: buyerDateFilter,
-        lastDate: buyerDateFilter,
-        buyingActivity: [{
-          date: buyerDateFilter,
-          increase: row.increase_amount,
-          newTotal: row.last_shares
-        }]
-      }));
+      filteredBuyers = filterRows.map(row => {
+        const finalShares = Number(row.last_shares);
+        const totalIncrease = Number(row.increase_amount);
+        const initialShares = Number(row.first_shares);
+        
+        return {
+          shareholderId: row.shareholder_id,
+          name: row.shareholder_name,
+          initialShares: initialShares,
+          finalShares: finalShares,
+          totalIncrease: totalIncrease,
+            increasePercent: initialShares > 0 ? ((totalIncrease / initialShares) * 100).toFixed(2) : '100',
+          initialOwnership: 0, // Would need calculation if needed
+          finalOwnership: 0, // Would need calculation if needed
+          ownershipChange: 0, // Would need calculation if needed
+          buyingDays: 1,
+          averageIncreasePerBuy: totalIncrease,
+          firstDate: buyerDateFilter,
+          lastDate: buyerDateFilter,
+          buyingActivity: [{
+            date: buyerDateFilter,
+            increase: totalIncrease,
+            newTotal: finalShares
+          }]
+        };
+      });
     }
 
     // Calculate pagination
@@ -188,45 +180,35 @@ export async function GET(request: NextRequest) {
     const endIndex = startIndex + limit;
     const paginatedBuyers = filteredBuyers.slice(startIndex, endIndex);
 
-    // Calculate summary statistics - count unique people who bought in the period (latest available previous data logic)
+    // Fast summary query using same logic as main query  
     const summaryQuery = `
-      WITH daily_positions AS (
+      WITH daily_data AS (
+        SELECT 
+          s1.shareholder_id,
+          s1.date,
+          MAX(s1.shares_amount) as shares_amount,
+          LAG(MAX(s1.shares_amount)) OVER (PARTITION BY s1.shareholder_id ORDER BY s1.date) as prev_shares
+        FROM shareholdings s1
+        WHERE s1.date BETWEEN DATE_SUB('${startDate}', INTERVAL 30 DAY) AND '${endDate}'
+        GROUP BY s1.shareholder_id, s1.date
+      ),
+      buyer_summary AS (
         SELECT 
           shareholder_id,
-          date,
-          (SELECT s2.shares_amount FROM shareholdings s2 
-           WHERE s2.shareholder_id = s1.shareholder_id AND s2.date = s1.date 
-           ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) as latest_shares
-        FROM shareholdings s1
-        WHERE date >= '${startDate}' AND date <= '${endDate}'
-        GROUP BY shareholder_id, date
-      ),
-      buyers_with_changes AS (
-        SELECT DISTINCT
-          dp.shareholder_id,
-          SUM(
-            CASE 
-              WHEN dp.latest_shares > COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
-                                              WHERE dp2.shareholder_id = dp.shareholder_id 
-                                              AND dp2.date < dp.date
-                                              ORDER BY dp2.date DESC LIMIT 1), 0)
-              THEN dp.latest_shares - COALESCE((SELECT dp2.latest_shares FROM daily_positions dp2 
-                                              WHERE dp2.shareholder_id = dp.shareholder_id 
-                                              AND dp2.date < dp.date
-                                              ORDER BY dp2.date DESC LIMIT 1), 0)
-              ELSE 0
-            END
-          ) as total_bought,
-          MAX(dp.latest_shares) as final_shares
-        FROM daily_positions dp
-        GROUP BY dp.shareholder_id
-        HAVING total_bought > 0
+          SUM(CASE 
+            WHEN date >= '${startDate}' AND shares_amount > COALESCE(prev_shares, 0)
+            THEN shares_amount - COALESCE(prev_shares, 0)
+            ELSE 0 
+          END) as total_increase
+        FROM daily_data
+        GROUP BY shareholder_id
+        HAVING total_increase > 0
       )
       SELECT 
         COUNT(shareholder_id) as totalActiveBuyers,
-        SUM(total_bought) as totalSharesAccumulated,
-        AVG(total_bought) as averageIncrease
-      FROM buyers_with_changes
+        SUM(total_increase) as totalSharesAccumulated,
+        AVG(total_increase) as averageIncrease
+      FROM buyer_summary
     `;
 
     const summaryResults = await db.execute(sql.raw(summaryQuery));
